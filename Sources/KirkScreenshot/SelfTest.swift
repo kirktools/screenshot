@@ -91,6 +91,31 @@ import StitchCore
     let directory = ProcessInfo.processInfo.environment["KIRK_SELFTEST_DIR"] ?? NSTemporaryDirectory()
     let path = URL(fileURLWithPath: directory).appendingPathComponent("desktop-smoke.png")
     try image.png().write(to: path, options: .atomic)
+    for _ in 0..<3 {
+        let stream = try provider.makeStream(rect)
+        try await stream.start()
+        let frames = stream.frames
+        do {
+            let first = try await withThrowingTaskGroup(of: CapturedFrame.self) { group in
+                group.addTask {
+                    for try await frame in frames { return frame }
+                    throw CaptureError.message("持续采集未产生有效帧")
+                }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(4))
+                    throw CaptureError.message("等待持续采集首帧超时")
+                }
+                defer { group.cancelAll() }
+                return try await group.next()!
+            }
+            guard first.image.width == image.width, first.image.height == image.height else {
+                throw CaptureError.message("持续采集 Retina 尺寸与普通截图不一致")
+            }
+            await stream.stop()
+            await stream.stop() // 重复结束应安全，不保留系统缓冲区。
+        } catch { await stream.stop(); throw error }
+    }
+    print("SCSTREAM SMOKE PASSED: 3 start / first-frame / stop cycles, 2x pixel dimensions verified")
     print("CAPTURE SMOKE PASSED: \(image.width) x \(image.height), scale=\(scale). Local private output: \(path.path)")
 }
 

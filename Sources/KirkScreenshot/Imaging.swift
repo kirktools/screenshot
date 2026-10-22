@@ -3,6 +3,8 @@ import ScreenCaptureKit
 import StitchCore
 import ImageIO
 import UniformTypeIdentifiers
+import CoreMedia
+import CoreVideo
 
 extension CGImage {
     var nsImage: NSImage { NSImage(cgImage: self, size: NSSize(width: width, height: height)) }
@@ -35,6 +37,7 @@ enum CaptureError: LocalizedError {
 @MainActor protocol RegionCaptureProvider {
     func prepare() async throws
     func capture(_ region: CGRect) async throws -> CGImage
+    func makeStream(_ region: CGRect) throws -> any RegionFrameStream
 }
 
 @MainActor final class MacCaptureProvider: RegionCaptureProvider {
@@ -46,6 +49,28 @@ enum CaptureError: LocalizedError {
             guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { return nil }
             return (id, screen.frame)
         })
+    }
+    func makeStream(_ region: CGRect) throws -> any RegionFrameStream {
+        guard let content, let screen = NSScreen.screens.first(where: { $0.frame.contains(region) }),
+              let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+              screenSnapshot[id] == screen.frame,
+              let display = content.displays.first(where: { $0.displayID == id }) else {
+            throw CaptureError.message("长截图需要同一显示器内的有效选区；显示器布局改变后请重新框选")
+        }
+        let scale = screen.backingScaleFactor
+        let config = SCStreamConfiguration()
+        config.sourceRect = CGRect(x: region.minX - screen.frame.minX, y: screen.frame.maxY - region.maxY,
+                                   width: region.width, height: region.height)
+        config.width = Int((region.width * scale).rounded()); config.height = Int((region.height * scale).rounded())
+        guard config.width > 0, config.height > 0, config.width * config.height <= 32_000_000 else {
+            throw CaptureError.message("长截图区域过大，请缩小区域")
+        }
+        config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        config.queueDepth = 3; config.pixelFormat = kCVPixelFormatType_32BGRA
+        config.showsCursor = false; config.scalesToFit = true; config.capturesAudio = false
+        config.colorSpaceName = CGColorSpace.sRGB
+        let excluded = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
+        return try MacRegionStream(filter: SCContentFilter(display: display, excludingApplications: excluded, exceptingWindows: []), configuration: config)
     }
     func capture(_ region: CGRect) async throws -> CGImage {
         guard let content else { throw CaptureError.message("屏幕采集尚未准备好") }
@@ -81,7 +106,7 @@ enum CaptureError: LocalizedError {
     }
 }
 
-struct StitchPiece {
+struct StitchPiece: @unchecked Sendable {
     let image: CGImage
     let addedRows: Int
     let frame: GrayFrame
@@ -100,4 +125,14 @@ func compose(_ pieces: [StitchPiece]) -> CGImage? {
         top += piece.addedRows
     }
     return ctx.makeImage()
+}
+
+/// cropping 会共享原图存储，重新绘制后只保留新增条带，避免每次微小滚动保存整屏。
+func copiedStrip(_ image: CGImage, rows: Int) -> CGImage? {
+    guard rows > 0, rows <= image.height,
+          let crop = image.cropping(to: CGRect(x: 0, y: image.height - rows, width: image.width, height: rows)),
+          let context = CGContext(data: nil, width: image.width, height: rows, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+    context.draw(crop, in: CGRect(x: 0, y: 0, width: image.width, height: rows))
+    return context.makeImage()
 }

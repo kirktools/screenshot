@@ -5,6 +5,10 @@ import Foundation
     static func main() {
         let suite = StitchMatcherTests()
         let tests: [(String, () -> Void)] = [
+            ("连续滚动不停稳", suite.testContinuousMotionWithoutStableFrames),
+            ("短暂失败恢复", suite.testTransientFailureRecoversAgainstConfirmedAnchor),
+            ("丢帧及静止超时", suite.testPersistentGapAndIdleTimeout),
+            ("惯性回弹和撤销锚点", suite.testReverseBounceAndUndoAnchor),
             ("精确重叠", suite.testNormalOverlapAndExactPixelOffsets),
             ("重复帧", suite.testDuplicate),
             ("渲染噪声", suite.testSmallRenderingNoise),

@@ -6,22 +6,57 @@ final class PassivePanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+private struct ProcessedFrame: @unchecked Sendable {
+    let result: TrackingResult
+    let piece: StitchPiece?
+}
+
+private actor ScrollProcessor {
+    private var tracker = ContinuousStitchTracker()
+    init(anchor: GrayFrame? = nil) { tracker.reset(anchor: anchor) }
+    func process(_ input: CapturedFrame) -> ProcessedFrame {
+        let frame = input.image.grayFrame()
+        let result = tracker.consume(frame, at: input.time)
+        let rows: Int
+        switch result {
+        case .seed: rows = input.image.height
+        case .append(let added): rows = added
+        default: return ProcessedFrame(result: result, piece: nil)
+        }
+        let piece = copiedStrip(input.image, rows: rows).map { StitchPiece(image: $0, addedRows: rows, frame: frame) }
+        return ProcessedFrame(result: result, piece: piece)
+    }
+    func timeout(at time: Double) -> TrackingResult? { tracker.timeout(at: time) }
+}
+
 @MainActor final class ScrollSession {
     private let provider: RegionCaptureProvider
     private let region: CGRect
     private let hotkeys: HotkeyRegistry
     private var task: Task<Void, Never>?
     private var pieces: [StitchPiece] = []
-    private var candidate: GrayFrame?
+    private var stream: (any RegionFrameStream)?
+    private var watchdog: Task<Void, Never>?
+    private var finishTask: Task<Void, Never>?
+    private var processor = ScrollProcessor()
+    private var generation = 0
+    private var revision = 0
+    private var pending = false
+    private var finishing = false
+    private var confirmPartial = false
+    private var layoutInvalid = false
+    private var screenObserver: NSObjectProtocol?
+    private var previewTime = 0.0
     private var paused = false
     private var stopped = false
-    private var unstableCount = 0
     private var memoryBytes = 0
-    private let matcher = StitchMatcher()
     private let panel: PassivePanel
     private let status = NSTextField(wrappingLabelWithString: "准备捕获…")
     private let preview = NSImageView()
     private let count = NSTextField(labelWithString: "")
+    var diagnosticSnapshot: (height: Int, count: Int, paused: Bool, pending: Bool, bytes: Int) {
+        (pieces.reduce(0) { $0 + $1.addedRows }, pieces.count, paused, pending, memoryBytes)
+    }
     var completion: ((CGImage?) -> Void)?
     init(provider: RegionCaptureProvider, region: CGRect, hotkeys: HotkeyRegistry) {
         self.provider = provider; self.region = region; self.hotkeys = hotkeys
@@ -49,58 +84,98 @@ final class PassivePanel: NSPanel {
             panel.setFrameOrigin(CGPoint(x: x, y: max(screen.visibleFrame.minY, min(region.maxY - 400, screen.visibleFrame.maxY - 400))))
         }
     }
-    func start() -> Bool {
-        guard hotkeys.register("session.finish", shortcut: Shortcut(key: 36, modifiers: 0, label: "↩"), action: { [weak self] in self?.finishCapture() }) else { return false }
-        guard hotkeys.register("session.cancel", shortcut: Shortcut(key: 53, modifiers: 0, label: "Esc"), action: { [weak self] in self?.cancelCapture() }) else { hotkeys.unregister("session.finish"); return false }
-        panel.orderFrontRegardless()
-        task = Task { [weak self] in
-            while let self, !self.stopped, !Task.isCancelled {
-                if !self.paused {
-                    do {
-                        let image = try await self.provider.capture(self.region)
-                        guard !self.stopped else { break }
-                        self.consume(image)
-                    } catch { self.pause("捕获失败：\(error.localizedDescription)。请检查屏幕录制权限或重新框选。") }
-                }
-                try? await Task.sleep(for: .milliseconds(220))
+    func start(registerHotkeys: Bool = true, showPanel: Bool = true) -> Bool {
+        if registerHotkeys {
+            guard hotkeys.register("session.finish", shortcut: Shortcut(key: 36, modifiers: 0, label: "↩"), action: { [weak self] in self?.finishCapture() }) else { return false }
+            guard hotkeys.register("session.cancel", shortcut: Shortcut(key: 53, modifiers: 0, label: "Esc"), action: { [weak self] in self?.cancelCapture() }) else { hotkeys.unregister("session.finish"); return false }
+        }
+        if showPanel { panel.orderFrontRegardless() }
+        screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, !self.stopped else { return }
+                self.layoutInvalid = true; self.pending = true
+                self.pause("显示器布局或缩放已变化，请完成已有部分或取消后重新框选。")
+            }
+        }
+        launchStream()
+        watchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(200))
+                guard let self, !self.stopped else { return }
+                guard !self.paused, !self.finishing else { continue }
+                let epoch = self.generation, revision = self.revision
+                let timeout = await self.processor.timeout(at: ProcessInfo.processInfo.systemUptime)
+                guard epoch == self.generation, revision == self.revision, self.pending, !self.paused, !self.stopped, !self.finishing else { continue }
+                if case .paused(let reason) = timeout { self.pause(self.message(reason)) }
             }
         }
         return true
     }
-    private func consume(_ image: CGImage) {
-        let frame = image.grayFrame()
-        // 两次采样稳定才进行拼接，避免把滚动动画直接拼入结果。
-        guard let candidate, matcher.difference(candidate, frame) < 0.8 else {
-            self.candidate = frame
-            unstableCount += 1
-            if unstableCount >= 14 {
-                pause("滚动过快或画面持续变化。请停止滚动和动画，回到上一段附近，再点击重试。")
-            } else { status.stringValue = "等待画面稳定…请缓慢向下滚动，每次停顿半秒。" }
-            return
-        }
-        unstableCount = 0
-        self.candidate = frame
-        if pieces.isEmpty { append(image, frame: frame, rows: image.height); return }
-        switch matcher.match(previous: pieces.last!.frame, next: frame) {
-        case .duplicate: status.stringValue = "捕获中 · 请向下滚动，每次不超过半屏。回车完成，Esc 取消。"
-        case .append(let rows): append(image, frame: frame, rows: rows)
-        case .reverse: pause("检测到向上滚动。请回到缩略图末尾对应位置，再点击重试。需要删除内容时用撤销。")
-        case .ambiguous: pause("内容重复，无法唯一确定接缝。请缩小每次滚动幅度，或重新选择包含更多特征的区域。")
-        case .incompatibleSize: pause("像素尺寸或缩放发生变化，请取消并重新框选。")
-        case .changedContent: pause("内容发生局部变化，可能有固定栏、动画或新消息。请避开这些区域后重新框选。")
-        case .insufficientOverlap: pause("重叠不足或内容已改变。请向上回滚至上一段附近，停稳后点击重试；也可撤销或完成已有部分。")
+    private func launchStream() {
+        task = Task { [weak self] in
+            guard let self, !self.stopped, !Task.isCancelled else { return }
+            var retainedSource: (any RegionFrameStream)?
+            defer { if let retainedSource, self.stream === retainedSource { self.stream = nil } }
+            do {
+                let source = try self.provider.makeStream(self.region)
+                retainedSource = source; self.stream = source
+                try await source.start()
+                if self.stopped || Task.isCancelled { await source.stop(); return }
+                for try await frame in source.frames {
+                    guard !self.stopped, !Task.isCancelled else { break }
+                    guard !self.paused else { continue }
+                    let activeProcessor = self.processor
+                    let frameEpoch = self.generation
+                    let output = await activeProcessor.process(frame)
+                    guard frameEpoch == self.generation, !self.stopped, !self.paused else { continue }
+                    self.consume(output)
+                }
+                await source.stop()
+            } catch {
+                if !self.stopped {
+                    self.pending = true
+                    self.pause("捕获失败：\(error.localizedDescription)。请检查权限或重新框选。")
+                }
+                await retainedSource?.stop()
+            }
         }
     }
-    private func append(_ image: CGImage, frame: GrayFrame, rows: Int) {
-        let totalRows = pieces.reduce(rows) { $0 + $1.addedRows }
-        let bytes = image.bytesPerRow * image.height
-        guard totalRows <= 30_000, totalRows * image.width <= 32_000_000, memoryBytes + bytes <= 256_000_000 else {
-            pause("达到本次捕获的尺寸或内存上限，请完成并另起一张。")
+    private func consume(_ output: ProcessedFrame) {
+        revision += 1
+        switch output.result {
+        case .seed, .append:
+            guard let piece = output.piece else { pending = true; pause("内存不足，无法保存新增片段。已有内容仍保留。"); return }
+            pending = false; confirmPartial = false
+            append(piece)
+        case .duplicate:
+            pending = false
+            status.stringValue = "捕获中 · 可连续向下滚动，无需逐次停顿。回车完成，Esc 取消。"
+        case .recovering:
+            pending = true; confirmPartial = false
+            status.stringValue = "正在恢复接缝…可稍停或回滚一点；已确认的内容已保留。"
+        case .paused(let reason): pending = true; pause(message(reason))
+        }
+    }
+    private func message(_ reason: MatchResult) -> String {
+        switch reason {
+        case .reverse: return "持续向上滚动。请回到预览末尾附近后重试；需要删除内容时用撤销。"
+        case .ambiguous: return "重复内容无法唯一定位接缝。请回到预览末尾附近重试，或扩大选区以包含更多特征。"
+        case .incompatibleSize: return "像素尺寸或缩放发生变化，请取消并重新框选。"
+        case .changedContent: return "内容持续变化。请避开固定栏、动画或新消息，再回到预览末尾附近重试。"
+        default: return "持续无法找到可靠重叠，可能滚动过快或内容重排。请回到预览末尾附近重试；可撤销上一段。"
+        }
+    }
+    private func append(_ piece: StitchPiece) {
+        let totalRows = pieces.reduce(piece.addedRows) { $0 + $1.addedRows }
+        let bytes = piece.image.bytesPerRow * piece.image.height + piece.frame.pixels.count
+        guard totalRows <= 30_000, totalRows * piece.image.width <= 32_000_000, memoryBytes + bytes <= 256_000_000 else {
+            pending = true; pause("达到本次捕获的尺寸或内存上限，请完成已有部分并另起一张。")
             return
         }
-        pieces.append(StitchPiece(image: image, addedRows: rows, frame: frame)); memoryBytes += bytes
-        updatePreview()
-        status.stringValue = "已接入新片段 · 缓慢向下滚动，停稳后自动接图。"
+        pieces.append(piece); memoryBytes += bytes
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - previewTime >= 0.15 { updatePreview(); previewTime = now }
+        status.stringValue = "正在连续捕获 · 向下滚动即可，回车完成，Esc 取消。"
     }
     private func updatePreview() {
         // 缩略图直接绘制片段，避免每帧分配完整长图。
@@ -120,23 +195,70 @@ final class PassivePanel: NSPanel {
         thumb.unlockFocus(); preview.image = thumb
         count.stringValue = "\(pieces.count) 段 · \(w) × \(h) 像素"
     }
-    private func pause(_ message: String) { paused = true; status.stringValue = "已暂停：" + message }
-    @objc private func resume() { paused = false; candidate = nil; unstableCount = 0; status.stringValue = "重新检查中…请回到上一段附近，保留至少半屏重叠。" }
-    @objc private func undo() {
-        guard pieces.count > 1 else { status.stringValue = "已是第一段。"; return }
-        let removed = pieces.removeLast(); memoryBytes -= removed.image.bytesPerRow * removed.image.height
+    private func pause(_ message: String) {
+        paused = true; stream?.setPaused(true)
         updatePreview()
-        pause("已撤销。请向上回滚至保留片段附近，再点击重试。")
+        status.stringValue = "已暂停：" + message
+    }
+    @objc func resume() {
+        guard !stopped, !finishing else { return }
+        guard !layoutInvalid else { status.stringValue = "显示器布局已变化，请完成已有部分或取消后重新框选。"; return }
+        generation += 1
+        processor = ScrollProcessor(anchor: pieces.last?.frame)
+        pending = !pieces.isEmpty; confirmPartial = false; paused = false
+        status.stringValue = "重新接续中…请回到预览末尾附近，保留重叠内容。"
+        if let stream { stream.setPaused(false) } else { launchStream() }
+    }
+    @objc func undo() {
+        guard !stopped, !finishing else { return }
+        guard pieces.count > 1 else { status.stringValue = "已是第一段。"; return }
+        generation += 1
+        let removed = pieces.removeLast()
+        memoryBytes -= removed.image.bytesPerRow * removed.image.height + removed.frame.pixels.count
+        processor = ScrollProcessor(anchor: pieces.last?.frame)
+        pending = false; confirmPartial = false
+        pause("已撤销。请回滚至保留片段附近后重试。")
     }
     @objc func finishCapture() {
-        guard !stopped else { return }
-        guard !pieces.isEmpty, let image = compose(pieces) else { pause("无法生成长图，请撤销一段后再试。尚未丢弃捕获内容。"); return }
-        stop(); completion?(image)
+        guard !stopped, !finishing else { return }
+        guard !pieces.isEmpty else { status.stringValue = "尚未取得首帧，请稍候；Esc 可取消。"; return }
+        finishing = true
+        status.stringValue = "正在处理最后画面…"
+        // 先停止生产，再排空最多两帧的队列，避免回车时丢掉尚在处理的末段。
+        let source = stream
+        let captureTask = task
+        finishTask = Task { [weak self] in
+            guard let self else { return }
+            await source?.stop()
+            await captureTask?.value
+            guard !self.stopped else { return }
+            if self.pending && !self.confirmPartial {
+                self.confirmPartial = true; self.finishing = false
+                self.pause("末尾仍有未能接续的画面。再次按回车仅导出已确认部分，或回滚后重试。")
+                return
+            }
+            let retained = self.pieces
+            let image = await Task.detached(priority: .userInitiated) { compose(retained) }.value
+            guard !self.stopped else { return }
+            guard let image else {
+                self.finishing = false
+                self.pause("暂时无法生成长图，已有内容仍保留。可撤销一段或取消。")
+                return
+            }
+            self.stop(); self.completion?(image)
+        }
     }
     @objc func cancelCapture() { guard !stopped else { return }; stop(); completion?(nil) }
     private func stop() {
-        stopped = true; task?.cancel(); task = nil
+        stopped = true; generation += 1
+        task?.cancel(); task = nil
+        watchdog?.cancel(); watchdog = nil
+        finishTask?.cancel(); finishTask = nil
+        let source = stream; stream = nil
+        Task { await source?.stop() }
         hotkeys.unregister("session.finish"); hotkeys.unregister("session.cancel")
-        panel.orderOut(nil); panel.close(); pieces.removeAll(); candidate = nil
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver); self.screenObserver = nil }
+        panel.orderOut(nil); panel.close(); pieces.removeAll(); memoryBytes = 0
+        processor = ScrollProcessor()
     }
 }

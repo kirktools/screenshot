@@ -86,4 +86,49 @@ final class StitchMatcherTests: XCTestCase {
         }
     }
     func testRetinaHeight() { XCTAssertEqual(matcher.match(previous: frame(offset: 0, height: 1200), next: frame(offset: 377, height: 1200)), .append(rows: 377)) }
+    func testContinuousMotionWithoutStableFrames() {
+        var tracker = ContinuousStitchTracker()
+        XCTAssertEqual(tracker.consume(frame(offset: 0), at: 0), .seed)
+        var rows = 240
+        // 每帧均有位移，从不提供相同的停稳帧；包含偶发丢帧后的大位移。
+        var previous = 0
+        for (i, offset) in [4, 11, 23, 40, 62, 89, 124, 168, 221, 282, 350, 424, 503].enumerated() {
+            XCTAssertEqual(tracker.consume(frame(offset: offset), at: Double(i + 1) / 30), .append(rows: offset - previous))
+            rows += offset - previous; previous = offset
+        }
+        XCTAssertEqual(rows, 743)
+        XCTAssertFalse(tracker.hasUnmatchedFrame)
+    }
+    func testTransientFailureRecoversAgainstConfirmedAnchor() {
+        var tracker = ContinuousStitchTracker()
+        XCTAssertEqual(tracker.consume(frame(offset: 0), at: 0), .seed)
+        XCTAssertEqual(tracker.consume(frame(offset: 400), at: 0.1), .recovering(.insufficientOverlap))
+        XCTAssertEqual(tracker.consume(frame(offset: 85), at: 0.2), .append(rows: 85))
+        XCTAssertEqual(tracker.timeout(at: 2), nil)
+        XCTAssertFalse(tracker.hasUnmatchedFrame)
+    }
+    func testPersistentGapAndIdleTimeout() {
+        var tracker = ContinuousStitchTracker()
+        _ = tracker.consume(frame(offset: 0), at: 0)
+        XCTAssertEqual(tracker.consume(frame(offset: 400), at: 0.1), .recovering(.insufficientOverlap))
+        XCTAssertEqual(tracker.timeout(at: 0.5), nil)
+        XCTAssertEqual(tracker.timeout(at: 1), .paused(.insufficientOverlap))
+        XCTAssertEqual(tracker.hasUnmatchedFrame, true)
+        // 重试不得把缺失处当新起点。
+        tracker.reset(anchor: frame(offset: 0))
+        XCTAssertEqual(tracker.consume(frame(offset: 400), at: 2), .recovering(.insufficientOverlap))
+        XCTAssertEqual(tracker.consume(frame(offset: 70), at: 2.1), .append(rows: 70))
+    }
+    func testReverseBounceAndUndoAnchor() {
+        var tracker = ContinuousStitchTracker()
+        _ = tracker.consume(frame(offset: 100), at: 0)
+        XCTAssertEqual(tracker.consume(frame(offset: 80), at: 0.1), .recovering(.reverse))
+        XCTAssertEqual(tracker.consume(frame(offset: 125), at: 0.2), .append(rows: 25))
+        XCTAssertEqual(tracker.consume(frame(offset: 50), at: 0.3), .recovering(.reverse))
+        XCTAssertEqual(tracker.timeout(at: 1.2), .paused(.reverse))
+        tracker.reset(anchor: frame(offset: 100))
+        XCTAssertEqual(tracker.consume(frame(offset: 130), at: 2), .append(rows: 30))
+        XCTAssertEqual(tracker.consume(frame(offset: 130, sourceWidth: 1280), at: 2.1), .paused(.incompatibleSize))
+    }
+
 }

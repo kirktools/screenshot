@@ -27,6 +27,20 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: .module
             catch { fputs("STARTUP SMOKE FAILED: \(error)\n", stderr); exit(1) }
             return
         }
+        if CommandLine.arguments.contains("--live-scroll-self-test") {
+            Task { @MainActor in
+                do { try await runLiveScrollSelfTest(); NSApp.terminate(nil) }
+                catch { fputs("LIVE SCROLL FAILED: \(error)\n", stderr); exit(1) }
+            }
+            return
+        }
+        if CommandLine.arguments.contains("--scroll-session-self-test") {
+            Task { @MainActor in
+                do { try await runScrollSessionSelfTest(); print("SCROLL SESSION SELF-TEST PASSED"); NSApp.terminate(nil) }
+                catch { fputs("SCROLL SESSION SELF-TEST FAILED: \(error)\n", stderr); exit(1) }
+            }
+            return
+        }
         if CommandLine.arguments.contains("--capture-smoke-test") {
             Task { @MainActor in
                 do { try await runCaptureSmokeTest(); NSApp.terminate(nil) }
@@ -166,7 +180,7 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: .module
         window.title = "Kirk Screenshot · 设置"; window.isReleasedWhenClosed = false; window.center()
         let title = NSTextField(labelWithString: "随时截图，内容留在本机。")
         title.font = .systemFont(ofSize: 22, weight: .semibold)
-        let help = NSTextField(wrappingLabelWithString: "点击快捷键框，再按新的组合键。长截图时请框选可滚动正文，避开固定顶部栏、输入框和悬浮按钮；每次缓慢向下滚动半屏并停顿。")
+        let help = NSTextField(wrappingLabelWithString: "点击快捷键框，再按新的组合键。长截图时请框选可滚动正文，避开固定顶部栏、输入框和悬浮按钮；可连续向下滚动，无需逐次停顿；快速跳跃或内容重排可能无法接续。")
         let captureButtons = NSStackView(views: [NSButton(title: "区域截图", target: self, action: #selector(normalCapture)), NSButton(title: "滚动长截图", target: self, action: #selector(scrollCapture))])
         captureButtons.spacing = 12
         var views: [NSView] = [title, help, captureButtons]
