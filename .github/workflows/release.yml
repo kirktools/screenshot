@@ -20,11 +20,18 @@ jobs:
     runs-on: macos-15
     environment: release
     timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: master
           fetch-depth: 0
+      - name: 检查 Xcode 与 Swift 工具链
+        run: |
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          swift --version
       - name: 算法和渲染测试
         run: |
           swift test

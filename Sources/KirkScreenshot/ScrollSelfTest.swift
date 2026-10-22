@@ -51,11 +51,13 @@ import StitchCore
                            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
                            provider: CGDataProvider(data: Data(pixels) as CFData)!, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
     func image(_ offset: Int) -> CGImage { document.cropping(to: CGRect(x: 0, y: offset, width: width, height: 240))! }
+    let clipboard = NSPasteboard(name: .init("Kirk-Scroll-Test-" + UUID().uuidString))
+    defer { clipboard.releaseGlobally() }
     let region = CGRect(x: 100, y: 100, width: 128, height: 240)
     let provider = FixtureProvider()
-    let session = ScrollSession(provider: provider, region: region, hotkeys: HotkeyRegistry())
+    let session = ScrollSession(provider: provider, region: region, hotkeys: HotkeyRegistry(), clipboard: clipboard)
     var completed = false, output: CGImage?
-    session.completion = { output = $0; completed = true }
+    session.completion = { image, action in output = image; completed = action == .copy }
     defer { session.cancelCapture() }
     try require(session.start(registerHotkeys: false, showPanel: false), "合成会话启动失败")
     try await Task.sleep(for: .milliseconds(30))
@@ -69,19 +71,31 @@ import StitchCore
     let preview = session.diagnosticPreview
     try require(preview.visible && preview.width > 100 && preview.contentHeight > preview.viewportHeight && preview.originY > 0,
                 "连续滚动虽成功，但常驻预览没有保留比例或跟随末尾")
-    guard let zoom = session.diagnosticControls.compactMap({ $0 as? NSButton }).first(where: { $0.title == "放大预览" }) else {
+    let zoomIndex = session.diagnosticMoreMenu.items.firstIndex(where: { $0.title == "放大预览" })
+    guard let zoomIndex else {
         throw CaptureError.message("常驻预览缺少放大控件")
     }
-    zoom.performClick(nil)
+    session.diagnosticMoreMenu.performActionForItem(at: zoomIndex)
     try await wait { session.diagnosticPreview.width > preview.width + 100 }
-    zoom.performClick(nil)
+    session.diagnosticMoreMenu.performActionForItem(at: zoomIndex)
     try await wait { abs(session.diagnosticPreview.width - preview.width) < 1 }
+    try require(session.diagnosticPanelSize.height < 310, "正常状态仍占用大段文字空间")
+    let buttons = session.diagnosticControls.compactMap { $0 as? NSButton }
+    try require(buttons.count == 5 && buttons.allSatisfy { $0.image != nil && $0.toolTip != nil }, "主操作未精简为带说明的图标")
+    if let directory = ProcessInfo.processInfo.environment["KIRK_SELFTEST_DIR"],
+       let view = session.diagnosticControls.first,
+       let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("scroll-panel.png"))
+    }
     // 保留真正的最后一帧排空检查：末帧投递后立即完成，不等待处理。
     provider.source.send(image(322))
     session.finishCapture()
     try await wait { completed }
     try require(provider.source.stopped, "完成后未停止采集源")
     guard let output else { throw CaptureError.message("连续滚动未生成图片") }
+    let copiedPNG = try output.png()
+    try require(clipboard.data(forType: .png) == copiedPNG, "默认完成未将完整 PNG 写入剪贴板")
     try require(output.height == 562, "连续滚动末段丢失：\(output.height)")
     let expected = document.cropping(to: CGRect(x: 0, y: 0, width: width, height: 562))!
     // 直接比较解码后的 RGBA 字节，验证每一行和每个颜色通道，而非只看尺寸。
@@ -96,10 +110,10 @@ import StitchCore
     try output.png().write(to: URL(fileURLWithPath: directory).appendingPathComponent("continuous-scroll.png"), options: .atomic)
 
     let otherProvider = FixtureProvider()
-    let other = ScrollSession(provider: otherProvider, region: region, hotkeys: HotkeyRegistry())
+    let other = ScrollSession(provider: otherProvider, region: region, hotkeys: HotkeyRegistry(), clipboard: clipboard)
     defer { other.cancelCapture() }
     var otherCompleted = false, otherImage: CGImage?
-    other.completion = { otherImage = $0; otherCompleted = true }
+    other.completion = { image, _ in otherImage = image; otherCompleted = true }
     _ = other.start(registerHotkeys: false, showPanel: false)
     try await Task.sleep(for: .milliseconds(30))
     otherProvider.source.send(image(0))
@@ -128,10 +142,42 @@ import StitchCore
     other.finishCapture()
     try await wait { otherCompleted }
     try require(otherImage?.height == 270, "完成已确认部分的尺寸不正确")
+    let editProvider = FixtureProvider()
+    let editing = ScrollSession(provider: editProvider, region: region, hotkeys: HotkeyRegistry(), clipboard: clipboard)
+    defer { editing.cancelCapture() }
+    var editComplete = false
+    editing.completion = { image, action in editComplete = image != nil && action == .edit }
+    _ = editing.start(registerHotkeys: false, showPanel: false)
+    try await Task.sleep(for: .milliseconds(30))
+    editProvider.source.send(image(0))
+    try await wait { editing.diagnosticSnapshot.count == 1 }
+    let beforeEdit = clipboard.data(forType: .png)
+    guard let editButton = editing.diagnosticControls.compactMap({ $0 as? NSButton }).first(where: { $0.toolTip == "编辑长截图" }) else {
+        throw CaptureError.message("缺少显式编辑入口")
+    }
+    editButton.performClick(nil)
+    try await wait { editComplete }
+    try require(clipboard.data(forType: .png) == beforeEdit, "点击编辑不应先覆盖剪贴板")
+    let saveProvider = FixtureProvider()
+    let saving = ScrollSession(provider: saveProvider, region: region, hotkeys: HotkeyRegistry(), clipboard: clipboard)
+    defer { saving.cancelCapture() }
+    var saveComplete = false
+    saving.completion = { image, action in saveComplete = image != nil && action == .save }
+    _ = saving.start(registerHotkeys: false, showPanel: false)
+    try await Task.sleep(for: .milliseconds(30))
+    saveProvider.source.send(image(0))
+    try await wait { saving.diagnosticSnapshot.count == 1 }
+    guard let saveButton = saving.diagnosticControls.compactMap({ $0 as? NSButton }).first(where: { $0.toolTip == "保存 PNG" }) else {
+        throw CaptureError.message("缺少保存入口")
+    }
+    saveButton.performClick(nil)
+    try await wait { saveComplete }
+    let expectedSavedPNG = try image(0).png()
+    try require(clipboard.data(forType: .png) == expectedSavedPNG, "保存分支没有先保留 PNG 到剪贴板")
     let cancelProvider = FixtureProvider()
-    let cancelled = ScrollSession(provider: cancelProvider, region: region, hotkeys: HotkeyRegistry())
+    let cancelled = ScrollSession(provider: cancelProvider, region: region, hotkeys: HotkeyRegistry(), clipboard: clipboard)
     var callbacks = 0
-    cancelled.completion = { value in if value == nil { callbacks += 1 } }
+    cancelled.completion = { value, _ in if value == nil { callbacks += 1 } }
     _ = cancelled.start(registerHotkeys: false, showPanel: false)
     try await Task.sleep(for: .milliseconds(30))
     cancelProvider.source.send(image(0))
@@ -140,7 +186,7 @@ import StitchCore
     try await Task.sleep(for: .milliseconds(100))
     try require(callbacks == 1 && cancelled.diagnosticSnapshot.count == 0 && cancelled.diagnosticSnapshot.bytes == 0,
                 "取消后旧结果写回或资源未释放")
-    print("47 moving frames at ~30fps: exact RGBA, final-frame drain, recovery, idle timeout, undo/retry and partial confirmation verified")
+    print("47 moving frames at ~30fps: exact RGBA, drain, recovery, compact controls, direct PNG copy, explicit edit/save and partial confirmation verified")
 }
 
 /// 真正经过窗口合成器和 SCStream 的集成测试。独立测试进程绘制并连续滚动，不读取用户聊天。
@@ -174,9 +220,11 @@ import StitchCore
     let firstCapture = try await provider.capture(rect)
     let initialError = StitchMatcher().difference(firstCapture.grayFrame(), firstExpected.grayFrame())
     guard initialError < 1 else { throw CaptureError.message("测试窗口首帧与参考不符（可能遮挡或尚未显示），亮度误差 \(initialError)") }
-    let session = ScrollSession(provider: provider, region: rect, hotkeys: HotkeyRegistry())
+    let clipboard = NSPasteboard(name: .init("Kirk-Live-Test-" + UUID().uuidString))
+    defer { clipboard.releaseGlobally() }
+    let session = ScrollSession(provider: provider, region: rect, hotkeys: HotkeyRegistry(), clipboard: clipboard)
     var complete = false, result: CGImage?
-    session.completion = { result = $0; complete = true }
+    session.completion = { image, _ in result = image; complete = true }
     defer { session.cancelCapture() }
     _ = session.start(registerHotkeys: false, showPanel: true)
     try await wait { session.diagnosticSnapshot.count > 0 }

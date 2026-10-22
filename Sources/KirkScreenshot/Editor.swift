@@ -192,9 +192,7 @@ struct EditState {
         commitText()
         do {
             guard let output = render(state) else { throw CaptureError.message("无法渲染图片") }
-            let data = try output.png()
-            let board = NSPasteboard.general; board.clearContents()
-            guard board.setData(data, forType: .png) else { throw CaptureError.message("写入剪贴板失败") }
+            try output.copyPNG()
             feedback?("已复制 PNG 到剪贴板"); return true
         } catch { showError(error); return false }
     }

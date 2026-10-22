@@ -19,6 +19,11 @@ extension CGImage {
         }
         return GrayFrame(width: w, height: h, pixels: bytes, sourceWidth: width)
     }
+    @MainActor func copyPNG(to board: NSPasteboard = .general) throws {
+        let data = try png()
+        board.clearContents()
+        guard board.setData(data, forType: .png) else { throw CaptureError.message("写入剪贴板失败") }
+    }
     func png() throws -> Data {
         let data = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else { throw CaptureError.message("无法创建 PNG") }

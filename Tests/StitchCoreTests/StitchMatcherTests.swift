@@ -46,7 +46,13 @@ final class StitchMatcherTests: XCTestCase {
     }
     func testRepeatedPatternsAreAmbiguous() {
         func pattern(_ offset: Int) -> GrayFrame {
-            GrayFrame(width: 64, height: 240, pixels: (0..<(64*240)).map { UInt8((($0 / 64 + offset) % 24) * 10) })
+            let width = 64, height = 240
+            var pixels = [UInt8](repeating: 0, count: width * height)
+            for y in 0..<height {
+                let value = UInt8(((y + offset) % 24) * 10)
+                for x in 0..<width { pixels[y * width + x] = value }
+            }
+            return GrayFrame(width: width, height: height, pixels: pixels)
         }
         XCTAssertEqual(matcher.match(previous: pattern(0), next: pattern(7)), .ambiguous)
     }

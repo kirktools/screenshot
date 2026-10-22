@@ -4,7 +4,7 @@
 
 ## 自动测试
 
-`.github/workflows/ci.yml` 对 master push 与 PR 执行 Swift 算法测试、原生离屏渲染/PNG 自测、release 构建，并上传 14 天产物。矩阵：macos-14（arm64）与 macos-15-intel（x86_64）；runner 标签依据 [GitHub 官方说明](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。云端 CI 没有交互式权限验收，不能证明真实窗口截屏成功。workflow 仅给读取仓库权限，PR 不使用发布凭据。Actions 使用固定 commit SHA，对应官方 [checkout v7.0.1](https://github.com/actions/checkout/releases/tag/v7.0.1) 和 [upload-artifact v7.0.0](https://github.com/actions/upload-artifact/releases/tag/v7.0.0)，Dependabot 可提交升级 PR。
+`.github/workflows/ci.yml` 对 master push 与 PR 执行 Swift 算法测试、原生离屏渲染/PNG 自测、release 构建，并上传 14 天产物。矩阵：macos-15（arm64）与 macos-15-intel（x86_64）；CI 和 Release 均通过 DEVELOPER_DIR 固定 Xcode 16.4 / Swift 6.1，不依赖 runner 默认工具链，先检查并打印实际版本。Xcode 路径依据官方 [ARM 镜像清单](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md) 与 [Intel 镜像清单](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md)。应用最低编译目标仍为 macOS 14，macOS 14 实际运行仍需人工验收；runner 标签依据 [GitHub 官方说明](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。云端 CI 没有交互式权限验收，不能证明真实窗口截屏成功。workflow 仅给读取仓库权限，PR 不使用发布凭据。Actions 使用固定 commit SHA，对应官方 [checkout v7.0.1](https://github.com/actions/checkout/releases/tag/v7.0.1) 和 [upload-artifact v7.0.0](https://github.com/actions/upload-artifact/releases/tag/v7.0.0)，Dependabot 可提交升级 PR。
 
 ## 自动加版本与打包
 

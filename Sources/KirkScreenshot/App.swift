@@ -161,9 +161,19 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: .module
     private func beginScroll(_ region: CGRect, provider: MacCaptureProvider) throws {
         let session = ScrollSession(provider: provider, region: region, hotkeys: hotkeys)
         self.session = session
-        session.completion = { [weak self] image in
+        session.completion = { [weak self] image, action in
             self?.session = nil; self?.provider = nil; self?.busy = false
-            if let image { self?.present(image, region: region) }
+            guard let image else { return }
+            switch action {
+            case .copy: break
+            case .edit: self?.present(image, region: region)
+            case .save:
+                NSApp.activate(ignoringOtherApps: true)
+                let panel = NSSavePanel(); panel.allowedContentTypes = [.png]
+                panel.nameFieldStringValue = "Kirk-\(Date.now.formatted(.iso8601).replacingOccurrences(of: ":", with: "-")).png"
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                do { try image.png().write(to: url, options: .atomic) } catch { showError(error) }
+            }
         }
         guard session.start() else { self.session = nil; throw CaptureError.message("无法注册回车/Esc 会话快捷键") }
     }

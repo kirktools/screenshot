@@ -13,15 +13,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, macos-15-intel]
+        os: [macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    env:
+      # 两种架构使用相同 Swift 6 工具链；不依赖 runner 的默认 Xcode。
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Swift 版本
-        run: swift --version
+      - name: 检查 Xcode 与 Swift 工具链
+        run: |
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          swift --version
       - name: 算法测试
         run: swift test --enable-code-coverage
       - name: 原生渲染与导出测试（不读取桌面）

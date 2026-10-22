@@ -1,6 +1,8 @@
 import AppKit
 import StitchCore
 
+enum ScrollOutputAction { case copy, edit, save }
+
 final class PassivePanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
@@ -52,6 +54,7 @@ private final class ScrollPreviewCanvas: NSView {
     private let provider: RegionCaptureProvider
     private let region: CGRect
     private let hotkeys: HotkeyRegistry
+    private let clipboard: NSPasteboard
     private var task: Task<Void, Never>?
     private var pieces: [StitchPiece] = []
     private var stream: (any RegionFrameStream)?
@@ -78,7 +81,9 @@ private final class ScrollPreviewCanvas: NSView {
     private let status = NSTextField(wrappingLabelWithString: "准备捕获…")
     private let preview = NSScrollView()
     private let previewCanvas = ScrollPreviewCanvas()
-    private let followPreview = NSButton(checkboxWithTitle: "跟随末尾", target: nil, action: nil)
+    private var followsTail = true
+    private let moreMenu = NSMenu()
+    private let followItem = NSMenuItem(title: "跟随末尾", action: nil, keyEquivalent: "")
     private let count = NSTextField(labelWithString: "")
     var diagnosticSnapshot: (height: Int, count: Int, paused: Bool, pending: Bool, bytes: Int) {
         (pieces.reduce(0) { $0 + $1.addedRows }, pieces.count, paused, pending, memoryBytes)
@@ -90,9 +95,11 @@ private final class ScrollPreviewCanvas: NSView {
     var diagnosticPreview: (visible: Bool, width: CGFloat, contentHeight: CGFloat, viewportHeight: CGFloat, originY: CGFloat) {
         (!preview.isHidden, preview.frame.width, previewCanvas.frame.height, preview.contentSize.height, preview.contentView.bounds.origin.y)
     }
-    var completion: ((CGImage?) -> Void)?
-    init(provider: RegionCaptureProvider, region: CGRect, hotkeys: HotkeyRegistry) {
-        self.provider = provider; self.region = region; self.hotkeys = hotkeys
+    var diagnosticMoreMenu: NSMenu { moreMenu }
+    var diagnosticPanelSize: CGSize { panel.frame.size }
+    var completion: ((CGImage?, ScrollOutputAction) -> Void)?
+    init(provider: RegionCaptureProvider, region: CGRect, hotkeys: HotkeyRegistry, clipboard: NSPasteboard = .general) {
+        self.provider = provider; self.region = region; self.hotkeys = hotkeys; self.clipboard = clipboard
         boundary = CaptureBoundary(region: region)
         panel = PassivePanel(contentRect: CGRect(x: 0, y: 0, width: 300, height: 190),
                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -104,16 +111,27 @@ private final class ScrollPreviewCanvas: NSView {
         preview.verticalScrollElasticity = .none; preview.horizontalScrollElasticity = .none
         preview.documentView = previewCanvas
         previewHeight = preview.heightAnchor.constraint(equalToConstant: 240); previewHeight.isActive = true
-        followPreview.state = .on
-        let retry = NSButton(title: "重试", target: self, action: #selector(resume))
-        let undo = NSButton(title: "撤销上一段", target: self, action: #selector(undo))
-        let finish = NSButton(title: "完成 ↩", target: self, action: #selector(finishCapture))
-        let cancel = NSButton(title: "取消 Esc", target: self, action: #selector(cancelCapture))
-        let thumbnail = NSButton(title: "放大预览", target: self, action: #selector(toggleThumbnail(_:)))
-        let row = NSStackView(views: [retry, undo, thumbnail]); row.orientation = .horizontal
-        let bottom = NSStackView(views: [finish, cancel]); bottom.orientation = .horizontal
-        let meta = NSStackView(views: [count, followPreview]); meta.spacing = 8
-        let stack = NSStackView(views: [status, meta, preview, row, bottom]); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 10
+        status.isHidden = true; count.isHidden = true
+        preview.toolTip = "已捕获内容；回车复制并结束，Esc 取消"
+        moreMenu.autoenablesItems = false
+        for (title, action) in [("撤销上一段", #selector(undo)), ("重试接续", #selector(resume)), ("放大预览", #selector(toggleThumbnail(_:)))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self
+            moreMenu.addItem(item)
+        }
+        moreMenu.addItem(.separator())
+        followItem.action = #selector(toggleFollow(_:)); followItem.target = self; followItem.state = .on; moreMenu.addItem(followItem)
+        let details = NSMenuItem(title: "显示尺寸与段数", action: #selector(toggleDetails(_:)), keyEquivalent: ""); details.target = self; moreMenu.addItem(details)
+        let more = icon("ellipsis", "更多", #selector(showMore(_:)))
+        let edit = icon("square.and.pencil", "编辑长截图", #selector(finishForEditing))
+        let save = icon("square.and.arrow.down", "保存 PNG", #selector(finishForSaving))
+        let cancel = icon("xmark", "取消（Esc）", #selector(cancelCapture))
+        let finish = icon("checkmark", "复制并完成（回车）", #selector(finishCapture))
+        finish.contentTintColor = .systemGreen; cancel.contentTintColor = .systemRed
+        let spacer = NSView(); spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        let row = NSStackView(views: [more, spacer, edit, save, cancel, finish]); row.spacing = 6
+        let stack = NSStackView(views: [status, count, preview, row]); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 8; stack.detachesHiddenViews = true
+        preview.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         panelWidth = stack.widthAnchor.constraint(equalToConstant: 296); panelWidth.isActive = true
         panel.contentView = captureToolbar(views: [stack])
         positionPanel()
@@ -121,11 +139,11 @@ private final class ScrollPreviewCanvas: NSView {
     private func positionPanel() {
         let screen = NSScreen.screens.first(where: { $0.frame.contains(region) }) ?? NSScreen.main!
         let bounds = screen.visibleFrame
-        let width = previewExpanded ? min(720, bounds.width - 24) : min(320, bounds.width - 24)
+        let width = previewExpanded ? min(720, bounds.width - 24) : min(280, bounds.width - 24)
         panelWidth.constant = width - 24
-        previewHeight.constant = min(previewExpanded ? 420 : 240, max(100, bounds.height - 230))
+        previewHeight.constant = min(previewExpanded ? 420 : 220, max(100, bounds.height - 150))
         panel.contentView?.layoutSubtreeIfNeeded()
-        let size = CGSize(width: width, height: min(bounds.height - 16, max(360, panel.contentView!.fittingSize.height)))
+        let size = CGSize(width: width, height: min(bounds.height - 16, panel.contentView!.fittingSize.height))
         var frame = CaptureLayout.toolbar(near: region, size: size, within: bounds)
         if region.maxX + size.width + 20 <= bounds.maxX {
             frame.origin = CGPoint(x: region.maxX + 10, y: max(bounds.minY + 8, min(region.maxY - size.height, bounds.maxY - size.height - 8)))
@@ -134,9 +152,30 @@ private final class ScrollPreviewCanvas: NSView {
         }
         panel.setFrame(frame, display: true)
     }
-    @objc private func toggleThumbnail(_ sender: NSButton) {
+    @objc private func toggleThumbnail(_ sender: NSMenuItem) {
         previewExpanded.toggle(); sender.title = previewExpanded ? "缩小预览" : "放大预览"
         positionPanel(); updatePreview()
+    }
+
+    private func icon(_ symbol: String, _ label: String, _ action: Selector) -> NSButton {
+        let button = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: label)!, target: self, action: action)
+        button.isBordered = false; button.imagePosition = .imageOnly
+        button.toolTip = label; button.setAccessibilityLabel(label)
+        button.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        return button
+    }
+    @objc private func showMore(_ sender: NSButton) { moreMenu.popUp(positioning: nil, at: CGPoint(x: 0, y: sender.bounds.maxY), in: sender) }
+    @objc private func toggleFollow(_ sender: NSMenuItem) {
+        followsTail.toggle(); sender.state = followsTail ? .on : .off; updatePreview()
+    }
+    @objc private func toggleDetails(_ sender: NSMenuItem) {
+        count.isHidden.toggle(); sender.state = count.isHidden ? .off : .on; positionPanel()
+    }
+    private func showStatus(_ message: String?) {
+        let hidden = message == nil
+        status.stringValue = message ?? ""; let changed = status.isHidden != hidden; status.isHidden = hidden
+        if changed { positionPanel() }
     }
 
     func start(registerHotkeys: Bool = true, showPanel: Bool = true) -> Bool {
@@ -207,10 +246,10 @@ private final class ScrollPreviewCanvas: NSView {
         case .duplicate:
             paused = false; automaticRecovery = false
             pending = false; confirmPartial = false
-            status.stringValue = "捕获中 · 可连续向下滚动，无需逐次停顿。回车完成，Esc 取消。"
+            showStatus(nil)
         case .recovering:
             pending = true; confirmPartial = false
-            status.stringValue = "正在恢复接缝…可稍停或回滚一点；已确认的内容已保留。"
+            showStatus("正在恢复接缝…可稍停或回滚一点；已确认的内容已保留。")
         case .paused(let reason): pending = true; pause(message(reason), automatically: reason != .incompatibleSize)
         }
     }
@@ -233,18 +272,19 @@ private final class ScrollPreviewCanvas: NSView {
         pieces.append(piece); memoryBytes += bytes
         let now = ProcessInfo.processInfo.systemUptime
         if now - previewTime >= 0.15 { updatePreview(); previewTime = now }
-        status.stringValue = "正在连续捕获 · 向下滚动即可，回车完成，Esc 取消。"
+        showStatus(nil)
     }
     private func updatePreview() {
         let height = pieces.reduce(0) { $0 + $1.addedRows }, width = pieces.first?.image.width ?? 1
         count.stringValue = "\(width) × \(height) · \(pieces.count) 段"
+        preview.toolTip = count.stringValue + "；回车复制并结束，Esc 取消"
         guard height > 0 else { return }
         let targetWidth = max(1, panel.frame.width - 24)
         let scale = targetWidth / CGFloat(width)
         previewCanvas.zoom = scale; previewCanvas.pieces = pieces
         previewCanvas.setFrameSize(CGSize(width: targetWidth, height: max(preview.contentSize.height, CGFloat(height) * scale)))
         previewCanvas.needsDisplay = true
-        if followPreview.state == .on {
+        if followsTail {
             preview.contentView.scroll(to: CGPoint(x: 0, y: max(0, previewCanvas.frame.height - preview.contentSize.height)))
             preview.reflectScrolledClipView(preview.contentView)
         }
@@ -253,20 +293,20 @@ private final class ScrollPreviewCanvas: NSView {
         let entering = !paused
         paused = true; automaticRecovery = automatically; stream?.setPaused(!automatically)
         if entering { updatePreview() }
-        status.stringValue = (automatically ? "等待接续（仍在识别）：" : "已暂停：") + message
+        showStatus((automatically ? "等待接续（仍在识别）：" : "已暂停：") + message)
     }
     @objc func resume() {
         guard !stopped, !finishing else { return }
-        guard !layoutInvalid else { status.stringValue = "显示器布局已变化，请完成已有部分或取消后重新框选。"; return }
+        guard !layoutInvalid else { showStatus("显示器布局已变化，请完成已有部分或取消后重新框选。"); return }
         generation += 1
         processor = ScrollProcessor(anchor: pieces.last?.frame)
         pending = !pieces.isEmpty; confirmPartial = false; paused = false; automaticRecovery = false
-        status.stringValue = "重新接续中…请回到预览末尾附近，保留重叠内容。"
+        showStatus("重新接续中…请回到预览末尾附近，保留重叠内容。")
         if let stream { stream.setPaused(false) } else { launchStream() }
     }
     @objc func undo() {
         guard !stopped, !finishing else { return }
-        guard pieces.count > 1 else { status.stringValue = "已是第一段。"; return }
+        guard pieces.count > 1 else { showStatus("已是第一段。"); return }
         generation += 1
         let removed = pieces.removeLast()
         memoryBytes -= removed.image.bytesPerRow * removed.image.height + removed.frame.pixels.count
@@ -275,11 +315,14 @@ private final class ScrollPreviewCanvas: NSView {
         updatePreview()
         pause("已撤销。请回滚至保留片段末尾附近，会自动接续。", automatically: true)
     }
-    @objc func finishCapture() {
+    @objc func finishCapture() { finish(action: .copy) }
+    @objc private func finishForEditing() { finish(action: .edit) }
+    @objc private func finishForSaving() { finish(action: .save) }
+    private func finish(action: ScrollOutputAction) {
         guard !stopped, !finishing else { return }
-        guard !pieces.isEmpty else { status.stringValue = "尚未取得首帧，请稍候；Esc 可取消。"; return }
+        guard !pieces.isEmpty else { showStatus("尚未取得首帧，请稍候；Esc 可取消。"); return }
         finishing = true
-        status.stringValue = "正在处理最后画面…"
+        showStatus("正在处理最后画面…")
         // 先停止生产，再排空最多两帧的队列，避免回车时丢掉尚在处理的末段。
         let source = stream
         let captureTask = task
@@ -301,10 +344,14 @@ private final class ScrollPreviewCanvas: NSView {
                 self.pause("暂时无法生成长图，已有内容仍保留。可撤销一段或取消。")
                 return
             }
-            self.stop(); self.completion?(image)
+            if action != .edit {
+                do { try image.copyPNG(to: self.clipboard) }
+                catch { self.finishing = false; self.pause("复制失败：\(error.localizedDescription)。可再次完成或选择编辑。"); return }
+            }
+            self.stop(); self.completion?(image, action)
         }
     }
-    @objc func cancelCapture() { guard !stopped else { return }; stop(); completion?(nil) }
+    @objc func cancelCapture() { guard !stopped else { return }; stop(); completion?(nil, .copy) }
     private func stop() {
         stopped = true; generation += 1
         task?.cancel(); task = nil
