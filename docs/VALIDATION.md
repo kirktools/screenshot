@@ -58,3 +58,25 @@ KIRK_TEST_CLIPBOARD=1 'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' -
 README 的默认 `UNIVERSAL=1 scripts/build-app.sh` 已在普通执行权限下实际构建通过。Swift 6.4 默认后端共用不同架构的输出目录，脚本现在会逐架构复制二进制后合并，避免被覆盖。链接器对 Command Line Tools 缺少两个搜索目录产生警告，但构建成功。
 
 在 Codex 文件隔离环境中也使用过 `KIRK_NATIVE_BUILD=1 KIRK_DISABLE_BUILD_SANDBOX=1 UNIVERSAL=1 scripts/build-app.sh`，把 Swift/Clang 缓存放在 `.build/cache`，绕过嵌套构建沙箱限制；不是关闭 macOS 的 Gatekeeper 或 SIP。native build system 在 Swift 6.4 中有弃用提示，普通开发机优先运行默认构建命令。
+
+## 2026-10-22：重启与系统快捷键冲突回归
+
+现象：用户重启后普通截图无响应，按自定义系统占用的 `⌘⇧7` 得到 Touch Bar 图片。调查时最初没有 KirkScreenshot 进程；再次打开后进程存在，但旧版只在首次启动显示设置，未实现 reopen 回调，因此看起来仍没有启动。
+
+系统 API `CopySymbolicHotKeys` 返回 keyCode 26 / modifiers 768（⌘⇧7）已启用；同机 ⌘⇧6 也被系统使用。最小复现证实旧方式 `RegisterEventHotKey` 对已被系统占用的 ⌘⇧6 仍返回 0（成功），因此仅检查注册返回值不足以排除冲突。没有改动任何系统快捷键或权限设置。
+
+修复：注册前查询已启用的系统绑定；启动时遇到冲突尝试备用组合键，保存并明确展示；提供无需热键的两种截图按钮；每次手动启动和 reopen 均显示状态，窗口重新激活时刷新权限。
+
+本地新增验证：
+
+- `--hotkey-smoke-test`：已启用的系统组合键被拒绝，错误明确标注 macOS；⌃⌥7 备用键注册通过；原 Return/Esc 和重复绑定检查继续通过。
+- `--startup-smoke-test`：可见设置窗口及两种截图按钮存在，关闭窗口后调用 reopen 处理器可恢复同一窗口，多次 reopen 不生成重复窗口。
+- 原 13 组算法测试与原生 PNG、拼接、打码、裁剪撤销/重做自测再次通过。
+
+以上启动回归是直接执行应用生命周期处理器的原生自测；真实键盘按下和用户权限授权仍需在桌面验证，不能把这些测试等同于用户已完成验收。
+
+最终包实际启动观察：设置窗口可见，显示区域截图 ⌘⇧2、长截图 ⌃⌥7，并明确提示“⌘⇧7 已被 macOS 系统快捷键占用，已改用 ⌃⌥7”；备用绑定已保存在应用偏好中。通过 UI 点击“区域截图”后，正常出现应用的屏幕录制权限引导，没有修改系统授权。窗口仍显示未获权限，因此尚不能宣称用户实际截图链路已恢复完成。UI 自动化发送 ⌘⇧2 未观察到动作，不能代替授权后的真实键盘验收。
+
+后续按用户明确要求，在系统设置的“键盘快捷键 → 截屏”中，仅取消“将触控栏的图片保存为文件（⇧⌘7）”的勾选。CopySymbolicHotKeys 再查询确认 keyCode 26 / modifiers 768 已禁用；触控栏拷贝到剪贴板的另一组合键和其他系统快捷键保持原样。将本机 Kirk 的 `screenshot.scroll` 偏好恢复为 ⌘⇧7，重开应用后从实际窗口确认普通截图 ⌘⇧2 / 长截图 ⌘⇧7，冲突提示消失。未重新构建应用，也未改动录屏权限。统一工具快捷键前缀仅讨论候选，尚未启用。
+
+后续权限排障：用户指出开关已打开但应用仍提示申请。实际读取系统设置确认 Kirk Screenshot 的录屏开关为 on，应用自身状态仍未授权，符合临时签名重建后旧授权条目未匹配的情形，但未读取 TCC 数据库，不能认定签名不匹配已得到直接证明。应用此前只位于仓库 dist，没有安装到用户 Applications；已原样复制到 `~/Applications/Kirk Screenshot.app`，SHA-256 与 designated requirement 均保持不变，并确认从安装路径打开状态窗口。未重新构建，未更改系统安全保护；是否重建这一条录屏授权记录等待用户当次确认。

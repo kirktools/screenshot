@@ -18,8 +18,15 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: .module
     private var lastExternalApp: NSRunningApplication?
     private var activationObserver: NSObjectProtocol?
     private var hotkeyWarnings: [String] = []
+    private var permissionStatusLabel: NSTextField?
+    private var hotkeyStatusLabel: NSTextField?
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        if CommandLine.arguments.contains("--startup-smoke-test") {
+            do { try runStartupSmokeTest(self); print("STARTUP SMOKE PASSED"); NSApp.terminate(nil) }
+            catch { fputs("STARTUP SMOKE FAILED: \(error)\n", stderr); exit(1) }
+            return
+        }
         if CommandLine.arguments.contains("--capture-smoke-test") {
             Task { @MainActor in
                 do { try await runCaptureSmokeTest(); NSApp.terminate(nil) }
@@ -47,16 +54,26 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: .module
         item.button?.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "Kirk Screenshot")
         buildMainMenu(); registerTools(); refreshMenu()
         if CommandLine.arguments.contains("--demo-editor") { present(makeDemoImage()); return }
-        if !UserDefaults.standard.bool(forKey: "hasOpened") {
-            UserDefaults.standard.set(true, forKey: "hasOpened"); openSettings()
-        }
+        // 手动启动和权限重启后给出可见状态，避免菜单栏应用看起来没有启动。
+        openSettings()
     }
     private func load(_ key: String, fallback: Shortcut) -> Shortcut {
         guard let data = UserDefaults.standard.data(forKey: key), let value = try? JSONDecoder().decode(Shortcut.self, from: data) else { return fallback }; return value
     }
     private func registerTools() {
-        if !hotkeys.register("screenshot.region", shortcut: normal, action: { [weak self] in self?.capture(scrolling: false) }) { hotkeyWarnings.append("区域截图快捷键被占用，请在设置中重新配置。") }
-        if !hotkeys.register("screenshot.scroll", shortcut: scroll, action: { [weak self] in self?.capture(scrolling: true) }) { hotkeyWarnings.append("长截图快捷键被占用，请在设置中重新配置。") }
+        for (name, requested, fallback, scrolling) in [
+            ("screenshot.region", normal, Shortcut.fallbackNormal, false),
+            ("screenshot.scroll", scroll, Shortcut.fallbackScroll, true)
+        ] {
+            let action: () -> Void = { [weak self] in self?.capture(scrolling: scrolling) }
+            if hotkeys.register(name, shortcut: requested, action: action) { continue }
+            let reason = hotkeys.lastError ?? "快捷键不可用"
+            if !requested.hasSameBinding(as: fallback), hotkeys.register(name, shortcut: fallback, action: action) {
+                if scrolling { scroll = fallback } else { normal = fallback }
+                UserDefaults.standard.set(try? JSONEncoder().encode(fallback), forKey: name)
+                hotkeyWarnings.append("\(reason)，已改用 \(fallback.label)。")
+            } else { hotkeyWarnings.append("\(reason)。请点击截图按钮，或在设置中重新配置。") }
+        }
     }
     private func refreshMenu() {
         let menu = NSMenu()
@@ -143,14 +160,16 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: .module
         }
     }
     private func openPrivacy() { if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") { NSWorkspace.shared.open(url) } }
-    @objc private func openSettings() {
-        if let settings { NSApp.activate(ignoringOtherApps: true); settings.makeKeyAndOrderFront(nil); return }
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 570, height: 510), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    @objc func openSettings() {
+        if let settings { refreshSettingsStatus(); NSApp.activate(ignoringOtherApps: true); settings.makeKeyAndOrderFront(nil); return }
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 610, height: 610), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Kirk Screenshot · 设置"; window.isReleasedWhenClosed = false; window.center()
         let title = NSTextField(labelWithString: "随时截图，内容留在本机。")
         title.font = .systemFont(ofSize: 22, weight: .semibold)
         let help = NSTextField(wrappingLabelWithString: "点击快捷键框，再按新的组合键。长截图时请框选可滚动正文，避开固定顶部栏、输入框和悬浮按钮；每次缓慢向下滚动半屏并停顿。")
-        var views: [NSView] = [title, help]
+        let captureButtons = NSStackView(views: [NSButton(title: "区域截图", target: self, action: #selector(normalCapture)), NSButton(title: "滚动长截图", target: self, action: #selector(scrollCapture))])
+        captureButtons.spacing = 12
+        var views: [NSView] = [title, help, captureButtons]
         for (name, shortcut) in [("screenshot.region", normal), ("screenshot.scroll", scroll)] {
             let label = NSTextField(labelWithString: name == "screenshot.region" ? "区域截图" : "滚动长截图")
             let recorder = ShortcutRecorder(string: shortcut.label); recorder.isEditable = false; recorder.isSelectable = false
@@ -160,23 +179,39 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: .module
                 let other = name == "screenshot.region" ? self.scroll : self.normal
                 guard value.key != other.key || value.modifiers != other.modifiers else { recorder?.stringValue = "与另一个工具冲突"; return }
                 let ok = self.hotkeys.register(name, shortcut: value) { [weak self] in self?.capture(scrolling: name == "screenshot.scroll") }
-                guard ok else { recorder?.stringValue = "快捷键已被占用，请重试"; return }
+                guard ok else { recorder?.stringValue = "设置失败，请重试"; self.hotkeyStatusLabel?.stringValue = self.hotkeys.lastError ?? "快捷键不可用"; return }
                 UserDefaults.standard.set(try? JSONEncoder().encode(value), forKey: name)
                 if name == "screenshot.region" { self.normal = value } else { self.scroll = value }
+                self.hotkeyWarnings.removeAll(); self.refreshSettingsStatus()
                 recorder?.stringValue = value.label; self.refreshMenu()
             }
             let row = NSStackView(views: [label, recorder]); row.spacing = 24; views.append(row)
         }
         let permissions = NSButton(title: "检查 / 申请屏幕录制权限…", target: self, action: #selector(permissionGuide)); views.append(permissions)
-        let status = NSTextField(wrappingLabelWithString: CGPreflightScreenCaptureAccess() ? "屏幕录制权限已开启。若捕获失败，请重新启动应用。" : "尚未授予屏幕录制权限。首次截图前请授权。")
+        let status = NSTextField(wrappingLabelWithString: "")
+        permissionStatusLabel = status
         status.textColor = .secondaryLabelColor; views.append(status)
-        if !hotkeyWarnings.isEmpty { views.append(NSTextField(wrappingLabelWithString: hotkeyWarnings.joined(separator: "\n"))) }
+        let hotkeyStatus = NSTextField(wrappingLabelWithString: "")
+        hotkeyStatusLabel = hotkeyStatus; views.append(hotkeyStatus)
         let version = NSTextField(labelWithString: "版本 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版") · macOS 14+ · MIT © kirktools")
         version.textColor = .secondaryLabelColor; views.append(version)
         let stack = NSStackView(views: views); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 18
         stack.translatesAutoresizingMaskIntoConstraints = false; window.contentView!.addSubview(stack)
-        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 24), help.widthAnchor.constraint(equalTo: stack.widthAnchor), status.widthAnchor.constraint(equalTo: stack.widthAnchor)])
-        settings = window; NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
+        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 24), help.widthAnchor.constraint(equalTo: stack.widthAnchor), status.widthAnchor.constraint(equalTo: stack.widthAnchor), hotkeyStatus.widthAnchor.constraint(equalTo: stack.widthAnchor)])
+        settings = window; refreshSettingsStatus(); NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
+    }
+    private func refreshSettingsStatus() {
+        permissionStatusLabel?.stringValue = CGPreflightScreenCaptureAccess()
+            ? "屏幕录制权限已开启。可点击上方按钮验证截图。"
+            : "尚未获得屏幕录制权限。请授权后退出并重新打开此应用；重新打开时会显示本窗口。"
+        hotkeyStatusLabel?.stringValue = hotkeyWarnings.isEmpty
+            ? "当前快捷键：区域截图 \(normal.label) · 长截图 \(scroll.label)。关闭本窗口后仍常驻菜单栏。"
+            : hotkeyWarnings.joined(separator: "\n")
+    }
+    func applicationDidBecomeActive(_ notification: Notification) { refreshSettingsStatus() }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !busy { openSettings() }
+        return false
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import StitchCore
 
 /// 不读取桌面、不申请权限：验证平台渲染、拼接方向和实际导出像素。
@@ -96,10 +97,42 @@ import StitchCore
 @MainActor func runHotkeySmokeTest(_ registry: HotkeyRegistry) throws {
     let enter = Shortcut(key: 36, modifiers: 0, label: "Return")
     let escape = Shortcut(key: 53, modifiers: 0, label: "Esc")
-    defer { registry.unregister("test.enter"); registry.unregister("test.escape"); registry.unregister("test.collision") }
+    defer {
+        for name in ["test.enter", "test.escape", "test.collision", "test.system", "test.fallback"] { registry.unregister(name) }
+    }
     guard registry.register("test.enter", shortcut: enter, action: {}),
           registry.register("test.enter", shortcut: enter, action: {}),
           registry.register("test.escape", shortcut: escape, action: {}) else { throw CaptureError.message("会话热键无法注册") }
     guard !registry.register("test.collision", shortcut: enter, action: {}) else { throw CaptureError.message("未检测到重复热键注册") }
-    print("HOTKEY SMOKE PASSED: Return / Escape registration, same-binding update and conflict detection")
+    guard let reserved = Shortcut.systemBindings()?.first(where: { $0.modifiers != 0 && $0.key <= 127 }) else {
+        throw CaptureError.message("无法找到启用的系统快捷键，不能验证系统冲突回归")
+    }
+    guard !registry.register("test.system", shortcut: reserved, action: {}), registry.lastError?.contains("macOS") == true else {
+        throw CaptureError.message("错误接受了 macOS 已启用的系统快捷键")
+    }
+    guard registry.register("test.fallback", shortcut: .fallbackScroll, action: {}) else {
+        throw CaptureError.message("备用长截图快捷键不可用：\(registry.lastError ?? "未知错误")")
+    }
+    print("HOTKEY SMOKE PASSED: Return / Escape, duplicate binding, macOS reserved shortcut rejection, fallback binding")
+}
+
+@MainActor func runStartupSmokeTest(_ delegate: AppDelegate) throws {
+    // 与机器上的旧 hasOpened 偏好无关：重启后必须能看到状态，重开时不能变成无响应。
+    delegate.openSettings()
+    guard let window = NSApp.windows.first(where: { $0.title == "Kirk Screenshot · 设置" }), window.isVisible else {
+        throw CaptureError.message("启动后没有可见的状态窗口")
+    }
+    func buttons(in view: NSView) -> [NSButton] {
+        (view as? NSButton).map { [$0] } ?? view.subviews.flatMap { buttons(in: $0) }
+    }
+    let titles = buttons(in: window.contentView!).map(\.title)
+    guard titles.contains("区域截图"), titles.contains("滚动长截图") else { throw CaptureError.message("缺少无需快捷键的截图入口") }
+    window.close()
+    guard !window.isVisible else { throw CaptureError.message("无法关闭设置窗口") }
+    _ = delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
+    guard window.isVisible else { throw CaptureError.message("关闭设置后再次打开应用未恢复窗口") }
+    _ = delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: true)
+    guard NSApp.windows.filter({ $0.title == window.title }).count == 1 else { throw CaptureError.message("重复打开生成了多个设置窗口") }
+    window.close()
+    print("Startup status window, direct capture buttons and reopen behavior verified")
 }
