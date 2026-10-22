@@ -1,0 +1,77 @@
+name: Prepare Release
+# 手动选择增量；不会因普通 push 自动发布。默认生成 Draft 供维护者验收。
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'SemVer 增量'
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+        required: true
+permissions:
+  contents: write
+concurrency:
+  group: release-master
+  cancel-in-progress: false
+jobs:
+  release:
+    if: github.repository == 'kirktools/screenshot' && github.ref == 'refs/heads/master'
+    runs-on: macos-15
+    environment: release
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: master
+          fetch-depth: 0
+      - name: 算法和渲染测试
+        run: |
+          swift test
+          .build/debug/KirkScreenshot --self-test
+      - name: 自动增加版本
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          next=$(python3 scripts/bump-version.py "$BUMP")
+          if git rev-parse "v$next" >/dev/null 2>&1; then
+            echo "版本标签已存在: $next" >&2
+            exit 1
+          fi
+          echo "value=$next" >> "$GITHUB_OUTPUT"
+      - name: 构建 universal 应用（ad-hoc 签名，尚未公证）
+        env:
+          UNIVERSAL: '1'
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          scripts/build-app.sh
+          lipo 'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' -verify_arch arm64
+          lipo 'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' -verify_arch x86_64
+          'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' --self-test
+          shasum -a 256 dist/*.zip > dist/SHA256SUMS.txt
+      - name: 上传构建产物（即使远端分支保护阻止提交仍保留）
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: release-${{ steps.version.outputs.value }}
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+      - name: 提交版本和标签（构建全部通过后）
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add VERSION
+          git commit -m "chore: release v$VERSION"
+          git tag "v$VERSION"
+          git push --atomic origin HEAD:master "v$VERSION"
+      - name: 创建 Draft Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          gh release create "v$VERSION" dist/*.zip dist/SHA256SUMS.txt \
+            --draft --verify-tag --title "Kirk Screenshot v$VERSION" \
+            --notes-file docs/RELEASE-NOTES.md

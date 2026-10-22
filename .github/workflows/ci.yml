@@ -1,0 +1,35 @@
+name: CI
+on:
+  push:
+    branches: [master]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Swift 版本
+        run: swift --version
+      - name: 算法测试
+        run: swift test --enable-code-coverage
+      - name: 原生渲染与导出测试（不读取桌面）
+        run: .build/debug/KirkScreenshot --self-test
+      - name: 构建应用
+        run: scripts/build-app.sh
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: Kirk-Screenshot-${{ matrix.os }}
+          path: dist/*.zip
+          retention-days: 14
