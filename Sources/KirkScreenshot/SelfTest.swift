@@ -44,6 +44,61 @@ import StitchCore
     canvas.apply(Annotation(tool: .rectangle, start: .zero, end: CGPoint(x: 40, y: 40)))
     canvas.redo(nil)
     try require(canvas.state.annotations.count == 1 && canvas.state.image.width == width, "新编辑没有清空重做历史")
+    // 原位编辑位置、浮动工具栏及关闭后遮罩释放；不读取桌面。
+    let selection = CGRect(x: NSScreen.main!.visibleFrame.minX + 100, y: NSScreen.main!.visibleFrame.minY + 200, width: 80, height: 130)
+    let overlay = EditorController(image: a, region: selection, allowScroll: true)
+    overlay.showWindow(nil)
+    try require(overlay.diagnosticGeometry.image == selection, "普通截图没有保留原选区位置")
+    if let directory = ProcessInfo.processInfo.environment["KIRK_SELFTEST_DIR"],
+       let view = overlay.diagnosticToolbarViews.first,
+       let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("toolbar-check.png"))
+    }
+    print("OVERLAY GEOMETRY: \(overlay.diagnosticGeometry)")
+    try require(overlay.diagnosticGeometry.toolbar.height >= 32, "工具栏高度不足，只有 isVisible 不能证明用户能看到它")
+    try require(overlay.diagnosticGeometry.toolbarVisible && overlay.diagnosticGeometry.toolbar.width > 200, "浮动工具栏不可见或尺寸异常")
+    try require(overlay.canvas.zoom == 0.5, "Retina 原位标注缩放不正确")
+    try require(!overlay.diagnosticGeometry.scrolling && overlay.diagnosticGeometry.elasticity == .none, "普通截图仍允许滚动或弹性回弹")
+    let toolbarViews = overlay.diagnosticToolbarViews
+    guard let blue = toolbarViews.compactMap({ $0 as? NSButton }).first(where: { $0.toolTip == "蓝色" }),
+          let widths = toolbarViews.compactMap({ $0 as? NSSegmentedControl }).first(where: { $0.label(forSegment: 0) == "细" }),
+          let shapes = toolbarViews.compactMap({ $0 as? NSSegmentedControl }).first(where: { $0.segmentCount == EditTool.allCases.count }) else {
+        throw CaptureError.message("工具栏缺少颜色、线宽或形状选择")
+    }
+    blue.performClick(nil)
+    widths.selectedSegment = 2; _ = widths.sendAction(widths.action, to: widths.target)
+    shapes.selectedSegment = EditTool.allCases.firstIndex(of: .ellipse)!; _ = shapes.sendAction(shapes.action, to: shapes.target)
+    try require(overlay.canvas.selectedColor == .blue && overlay.canvas.strokeWidth == 6 && overlay.canvas.tool == .ellipse, "样式控件未改变当前画笔")
+    let circle = Annotation(tool: .ellipse, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 100, y: 120), color: .blue, lineWidth: 8)
+    overlay.canvas.apply(circle)
+    overlay.canvas.selectedColor = .green; overlay.canvas.strokeWidth = 1.5
+    try require(overlay.canvas.state.annotations.first?.color == .blue && overlay.canvas.state.annotations.first?.lineWidth == 8, "改变样式意外修改已有标注")
+    let color = NSBitmapImageRep(cgImage: render(overlay.canvas.state)!).colorAt(x: 99, y: 70)!.usingColorSpace(.sRGB)!
+    try require(color.blueComponent > 0.9 && color.redComponent < 0.2, "圆形导出未使用选定颜色")
+    overlay.canvas.undo(nil); overlay.canvas.redo(nil)
+    try require(overlay.canvas.state.annotations.first?.color == .blue && overlay.canvas.state.annotations.first?.lineWidth == 8, "撤销重做未保留标注样式")
+
+    overlay.canvas.apply(Annotation(tool: .redact, start: CGPoint(x: 20, y: 25), end: CGPoint(x: 80, y: 95)))
+    try require(render(overlay.canvas.state)!.cropping(to: CGRect(x: 25, y: 30, width: 45, height: 55))!.grayFrame().pixels.allSatisfy { $0 == 0 }, "原位标注打码未生效")
+    overlay.canvas.tool = .text
+    let textClick = NSEvent.mouseEvent(with: .leftMouseDown, location: CGPoint(x: 20, y: 80), modifierFlags: [], timestamp: 0, windowNumber: overlay.window!.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+    overlay.canvas.mouseDown(with: textClick)
+    guard let field = overlay.canvas.subviews.compactMap({ $0 as? NSTextField }).first else {
+        throw CaptureError.message("文字工具没有在图片上创建输入框")
+    }
+    if let editor = field.currentEditor() { editor.string = "原位中文测试" } else { field.stringValue = "原位中文测试" }
+    overlay.canvas.commitText()
+    try require(overlay.canvas.state.annotations.last?.text == "原位中文测试", "内嵌文字尚未失焦时提交丢失内容")
+    overlay.canvas.cancelRequested?()
+    try require(!overlay.diagnosticGeometry.toolbarVisible && overlay.diagnosticGeometry.backdrops == 0 && overlay.window?.isVisible == false, "取消后遗留编辑遮罩或工具栏")
+    let boundary = CaptureBoundary(region: selection)
+    try require(boundary.window.ignoresMouseEvents && !boundary.window.canBecomeKey, "滚动边框抢占鼠标或键盘焦点")
+    try require(!boundary.window.hidesOnDeactivate, "边框在目标应用恢复焦点后会自动隐藏")
+    boundary.close()
+    let negativeScreen = CGRect(x: -1600, y: -200, width: 1600, height: 1000)
+    let placement = CaptureLayout.toolbar(near: CGRect(x: -900, y: 300, width: 600, height: 300), size: CGSize(width: 600, height: 50), within: negativeScreen)
+    try require(negativeScreen.contains(placement) && placement.maxY < 300, "负坐标屏幕工具栏定位错误")
     let path = ProcessInfo.processInfo.environment["KIRK_SELFTEST_DIR"] ?? NSTemporaryDirectory()
     let output = URL(fileURLWithPath: path).appendingPathComponent("kirk-selftest.png")
     try png.write(to: output, options: .atomic)
@@ -60,6 +115,13 @@ import StitchCore
         pb.clearContents()
         try require(pb.setData(png, forType: .png), "剪贴板写入失败")
         try require(pb.data(forType: .png) == png, "剪贴板读取失败")
+        let complete = EditorController(image: a, region: selection)
+        var dismissed = false
+        complete.dismissed = { dismissed = true }
+        complete.showWindow(nil)
+        complete.canvas.finishRequested?()
+        try require(dismissed && complete.window?.isVisible == false && !complete.diagnosticGeometry.toolbarVisible, "回车没有复制并关闭原位编辑")
+        try require(pb.data(forType: .png) != nil, "完成未输出剪贴板 PNG")
     }
     print("PNG export, redaction, image orientation, composition verified: \(output.path)")
 }
@@ -92,7 +154,7 @@ import StitchCore
     let path = URL(fileURLWithPath: directory).appendingPathComponent("desktop-smoke.png")
     try image.png().write(to: path, options: .atomic)
     for _ in 0..<3 {
-        let stream = try provider.makeStream(rect)
+        let stream = try await provider.makeStream(rect)
         try await stream.start()
         let frames = stream.frames
         do {

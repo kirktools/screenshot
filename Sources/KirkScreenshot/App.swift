@@ -22,6 +22,13 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: .module
     private var hotkeyStatusLabel: NSTextField?
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        if CommandLine.arguments.contains("--overlay-demo") {
+            buildMainMenu()
+            let screen = NSScreen.main!.visibleFrame
+            present(makeDemoImage(), region: CGRect(x: screen.midX - 300, y: screen.midY - 150, width: 600, height: 420), allowScroll: true)
+            if let number = editor?.diagnosticToolbarViews.first?.window?.windowNumber { print("OVERLAY TOOLBAR WINDOW: \(number)"); fflush(stdout) }
+            return
+        }
         if CommandLine.arguments.contains("--startup-smoke-test") {
             do { try runStartupSmokeTest(self); print("STARTUP SMOKE PASSED"); NSApp.terminate(nil) }
             catch { fputs("STARTUP SMOKE FAILED: \(error)\n", stderr); exit(1) }
@@ -90,6 +97,7 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: .module
         }
     }
     private func refreshMenu() {
+        guard item != nil else { return }
         let menu = NSMenu()
         let title = NSMenuItem(title: "Kirk Screenshot", action: nil, keyEquivalent: ""); menu.addItem(title)
         menu.addItem(.separator())
@@ -140,26 +148,48 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: .module
                     try await Task.sleep(for: .milliseconds(250))
                     if scrolling {
                         guard rect.height >= 100, rect.width >= 80 else { throw CaptureError.message("长截图区域至少需要 80 × 100 点，请框选正文内容。") }
-                        let session = ScrollSession(provider: provider, region: rect, hotkeys: self.hotkeys)
-                        self.session = session
-                        session.completion = { [weak self] image in
-                            self?.session = nil; self?.provider = nil; self?.busy = false
-                            if let image { self?.present(image) }
-                        }
-                        guard session.start() else { self.session = nil; throw CaptureError.message("无法注册回车/Esc 会话快捷键，请关闭占用这些按键的工具后重试。") }
+                        try self.beginScroll(rect, provider: provider)
                     } else {
                         let image = try await provider.capture(rect)
-                        self.busy = false; self.provider = nil; self.present(image)
+                        self.busy = false; self.provider = nil; self.present(image, region: rect, allowScroll: true)
                     }
                 } catch { self.busy = false; self.provider = nil; showError(CaptureError.message("\(error.localizedDescription)\n若刚授予屏幕录制权限，请退出应用后重新打开。")) }
             }
         }
         selector.begin()
     }
-    private func present(_ image: CGImage) {
-        editor?.close(); editor = EditorController(image: image); showEditor(); refreshMenu()
+    private func beginScroll(_ region: CGRect, provider: MacCaptureProvider) throws {
+        let session = ScrollSession(provider: provider, region: region, hotkeys: hotkeys)
+        self.session = session
+        session.completion = { [weak self] image in
+            self?.session = nil; self?.provider = nil; self?.busy = false
+            if let image { self?.present(image, region: region) }
+        }
+        guard session.start() else { self.session = nil; throw CaptureError.message("无法注册回车/Esc 会话快捷键") }
     }
-    @objc private func showEditor() { NSApp.activate(ignoringOtherApps: true); editor?.showWindow(nil) }
+    private func present(_ image: CGImage, region: CGRect? = nil, allowScroll: Bool = false) {
+        editor?.close()
+        let controller = EditorController(image: image, region: region, allowScroll: allowScroll)
+        editor = controller
+        controller.dismissed = { [weak self] in self?.busy = false }
+        controller.requestScroll = { [weak self] in
+            guard let self, let region else { return }
+            guard region.width >= 80, region.height >= 100, NSScreen.screens.contains(where: { $0.frame.contains(region) }) else {
+                self.busy = false; showError(CaptureError.message("长截图需在单一显示器内框选至少 80 × 100 点的正文区域。")); return
+            }
+            self.previousApp?.activate(options: [])
+            Task { @MainActor in
+                do {
+                    let provider = MacCaptureProvider(); self.provider = provider
+                    try await provider.prepare()
+                    try await Task.sleep(for: .milliseconds(250))
+                    try self.beginScroll(region, provider: provider)
+                } catch { self.busy = false; self.provider = nil; showError(error) }
+            }
+        }
+        showEditor(); refreshMenu()
+    }
+    @objc private func showEditor() { busy = true; NSApp.activate(ignoringOtherApps: true); editor?.showWindow(nil) }
     @objc private func quit() { session?.cancelCapture(); NSApp.terminate(nil) }
     @objc private func permissionGuide() {
         NSApp.activate(ignoringOtherApps: true)

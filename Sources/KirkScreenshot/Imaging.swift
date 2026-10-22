@@ -37,24 +37,32 @@ enum CaptureError: LocalizedError {
 @MainActor protocol RegionCaptureProvider {
     func prepare() async throws
     func capture(_ region: CGRect) async throws -> CGImage
-    func makeStream(_ region: CGRect) throws -> any RegionFrameStream
+    func makeStream(_ region: CGRect) async throws -> any RegionFrameStream
 }
 
 @MainActor final class MacCaptureProvider: RegionCaptureProvider {
     private var content: SCShareableContent?
     private var screenSnapshot: [CGDirectDisplayID: CGRect] = [:]
     func prepare() async throws {
-        content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        content = nil
+        let available = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        guard !available.displays.isEmpty else {
+            throw CaptureError.message("当前没有可捕获的显示器。请确认屏幕已解锁并点亮、录屏权限有效，再重新开始。")
+        }
+        content = available
         screenSnapshot = Dictionary(uniqueKeysWithValues: NSScreen.screens.compactMap { screen in
             guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { return nil }
             return (id, screen.frame)
         })
     }
-    func makeStream(_ region: CGRect) throws -> any RegionFrameStream {
-        guard let content, let screen = NSScreen.screens.first(where: { $0.frame.contains(region) }),
+    func makeStream(_ region: CGRect) async throws -> any RegionFrameStream {
+        // 选框和状态面板已经显示后再取应用列表。prepare 时本应用可能还没有可见窗口，
+        // 复用旧列表会漏掉自身，从而把新出现的边框/面板截进首帧。
+        let latest = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        guard content != nil, let screen = NSScreen.screens.first(where: { $0.frame.contains(region) }),
               let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
               screenSnapshot[id] == screen.frame,
-              let display = content.displays.first(where: { $0.displayID == id }) else {
+              let display = latest.displays.first(where: { $0.displayID == id }) else {
             throw CaptureError.message("长截图需要同一显示器内的有效选区；显示器布局改变后请重新框选")
         }
         let scale = screen.backingScaleFactor
@@ -69,7 +77,7 @@ enum CaptureError: LocalizedError {
         config.queueDepth = 3; config.pixelFormat = kCVPixelFormatType_32BGRA
         config.showsCursor = false; config.scalesToFit = true; config.capturesAudio = false
         config.colorSpaceName = CGColorSpace.sRGB
-        let excluded = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
+        let excluded = latest.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
         return try MacRegionStream(filter: SCContentFilter(display: display, excludingApplications: excluded, exceptingWindows: []), configuration: config)
     }
     func capture(_ region: CGRect) async throws -> CGImage {

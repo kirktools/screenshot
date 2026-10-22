@@ -23,7 +23,7 @@ import StitchCore
     let source = FixtureStream()
     func prepare() async throws {}
     func capture(_ region: CGRect) async throws -> CGImage { throw CaptureError.message("合成测试不读取桌面") }
-    func makeStream(_ region: CGRect) throws -> any RegionFrameStream { source }
+    func makeStream(_ region: CGRect) async throws -> any RegionFrameStream { source }
 }
 
 @MainActor func runScrollSessionSelfTest() async throws {
@@ -66,12 +66,24 @@ import StitchCore
     let retainedBytes = session.diagnosticSnapshot.bytes
     let fullScreens = 46 * (width * 240 * 4 + width * 240)
     try require(retainedBytes < fullScreens / 2, "新增片段仍保留了整屏图像")
+    let preview = session.diagnosticPreview
+    try require(preview.visible && preview.width > 100 && preview.contentHeight > preview.viewportHeight && preview.originY > 0,
+                "连续滚动虽成功，但常驻预览没有保留比例或跟随末尾")
+    guard let zoom = session.diagnosticControls.compactMap({ $0 as? NSButton }).first(where: { $0.title == "放大预览" }) else {
+        throw CaptureError.message("常驻预览缺少放大控件")
+    }
+    zoom.performClick(nil)
+    try await wait { session.diagnosticPreview.width > preview.width + 100 }
+    zoom.performClick(nil)
+    try await wait { abs(session.diagnosticPreview.width - preview.width) < 1 }
+    // 保留真正的最后一帧排空检查：末帧投递后立即完成，不等待处理。
+    provider.source.send(image(322))
     session.finishCapture()
     try await wait { completed }
     try require(provider.source.stopped, "完成后未停止采集源")
     guard let output else { throw CaptureError.message("连续滚动未生成图片") }
-    try require(output.height == 555, "连续滚动末段丢失：\(output.height)")
-    let expected = document.cropping(to: CGRect(x: 0, y: 0, width: width, height: 555))!
+    try require(output.height == 562, "连续滚动末段丢失：\(output.height)")
+    let expected = document.cropping(to: CGRect(x: 0, y: 0, width: width, height: 562))!
     // 直接比较解码后的 RGBA 字节，验证每一行和每个颜色通道，而非只看尺寸。
     func rgba(_ image: CGImage) -> Data {
         let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4,
@@ -99,9 +111,13 @@ import StitchCore
     try require(!other.diagnosticSnapshot.pending, "短暂失配未恢复")
     otherProvider.source.send(image(0))
     try await wait { other.diagnosticSnapshot.paused }
+    // 超时后仍应监听；回到已确认锚点附近，无需点击重试。
+    otherProvider.source.send(image(60))
+    try await wait { other.diagnosticSnapshot.count == 3 && !other.diagnosticSnapshot.paused }
+    other.undo()
+    try require(other.diagnosticSnapshot.count == 2, "自动恢复后撤销失败")
     other.undo()
     try require(other.diagnosticSnapshot.count == 1 && other.diagnosticSnapshot.height == 240, "撤销没有恢复锚点")
-    other.resume()
     otherProvider.source.send(image(30))
     try await wait { other.diagnosticSnapshot.count == 2 }
     otherProvider.source.send(image(600))
@@ -124,7 +140,7 @@ import StitchCore
     try await Task.sleep(for: .milliseconds(100))
     try require(callbacks == 1 && cancelled.diagnosticSnapshot.count == 0 && cancelled.diagnosticSnapshot.bytes == 0,
                 "取消后旧结果写回或资源未释放")
-    print("46 moving frames at ~30fps: exact RGBA, final-frame drain, recovery, idle timeout, undo/retry and partial confirmation verified")
+    print("47 moving frames at ~30fps: exact RGBA, final-frame drain, recovery, idle timeout, undo/retry and partial confirmation verified")
 }
 
 /// 真正经过窗口合成器和 SCStream 的集成测试。独立测试进程绘制并连续滚动，不读取用户聊天。
@@ -153,23 +169,44 @@ import StitchCore
     let rect = CGRect(x: info["x"]!, y: info["y"]!, width: info["width"]!, height: info["height"]!)
     let provider = MacCaptureProvider()
     try await provider.prepare()
+    let reference = NSImage(contentsOf: directory.appendingPathComponent("reference.png"))!.cgImage(forProposedRect: nil, context: nil, hints: nil)!
+    let firstExpected = reference.cropping(to: CGRect(x: 0, y: 0, width: reference.width, height: Int(rect.height * info["scale"]!)))!
+    let firstCapture = try await provider.capture(rect)
+    let initialError = StitchMatcher().difference(firstCapture.grayFrame(), firstExpected.grayFrame())
+    guard initialError < 1 else { throw CaptureError.message("测试窗口首帧与参考不符（可能遮挡或尚未显示），亮度误差 \(initialError)") }
     let session = ScrollSession(provider: provider, region: rect, hotkeys: HotkeyRegistry())
     var complete = false, result: CGImage?
     session.completion = { result = $0; complete = true }
     defer { session.cancelCapture() }
-    _ = session.start(registerHotkeys: false, showPanel: false)
+    _ = session.start(registerHotkeys: false, showPanel: true)
     try await wait { session.diagnosticSnapshot.count > 0 }
     try Data().write(to: directory.appendingPathComponent("go"))
     let expectedHeight = Int((info["height"]! * info["scale"]!) + info["offset"]!)
     do { try await wait { session.diagnosticSnapshot.height >= expectedHeight || session.diagnosticSnapshot.paused } }
-    catch { throw CaptureError.message("真实滚动未完成：\(session.diagnosticSnapshot)，\(error.localizedDescription)") }
-    guard !session.diagnosticSnapshot.paused else { throw CaptureError.message("真实滚动发生暂停：\(session.diagnosticSnapshot)") }
+    catch {
+        let progress = (try? String(contentsOf: directory.appendingPathComponent("progress.json"), encoding: .utf8)) ?? "no progress"
+        throw CaptureError.message("真实滚动未完成：\(session.diagnosticSnapshot)，fixture=\(progress)，\(error.localizedDescription)")
+    }
+    guard !session.diagnosticSnapshot.paused else { throw CaptureError.message("真实滚动发生暂停：\(session.diagnosticSnapshot)，\(session.diagnosticControls.compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: " / "))") }
     session.finishCapture()
     try await wait { complete }
     guard let result, result.height == expectedHeight else { throw CaptureError.message("真实滚动的最终高度不正确") }
-    let reference = NSImage(contentsOf: directory.appendingPathComponent("reference.png"))!.cgImage(forProposedRect: nil, context: nil, hints: nil)!
     let expected = reference.cropping(to: CGRect(x: 0, y: 0, width: result.width, height: expectedHeight))!
-    let difference = StitchMatcher().difference(result.grayFrame(), expected.grayFrame())
+    let actualGray = result.grayFrame(), expectedGray = expected.grayFrame()
+    let difference = StitchMatcher().difference(actualGray, expectedGray)
+    // 边框只占很少像素，全图均值可能仍通过；逐行、逐列检查以捕捉控件污染。
+    var worstRow = 0.0, worstColumn = 0.0
+    for y in 0..<actualGray.height {
+        var sum = 0
+        for x in 0..<actualGray.width { sum += abs(Int(actualGray.pixels[y * actualGray.width + x]) - Int(expectedGray.pixels[y * actualGray.width + x])) }
+        worstRow = max(worstRow, Double(sum) / Double(actualGray.width))
+    }
+    for x in 0..<actualGray.width {
+        var sum = 0
+        for y in 0..<actualGray.height { sum += abs(Int(actualGray.pixels[y * actualGray.width + x]) - Int(expectedGray.pixels[y * actualGray.width + x])) }
+        worstColumn = max(worstColumn, Double(sum) / Double(actualGray.height))
+    }
+    guard worstRow < 1, worstColumn < 1 else { throw CaptureError.message("真实输出含错行或边框污染：row=\(worstRow), column=\(worstColumn)") }
     guard difference < 1 else { throw CaptureError.message("真实屏幕输出与原始测试页面不一致：亮度误差 \(difference)") }
     print("LIVE SCROLL PASSED: SCStream + native scrolling window, \(result.width)x\(result.height), mean luminance error=\(difference)")
 }

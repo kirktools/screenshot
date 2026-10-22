@@ -131,4 +131,43 @@ final class StitchMatcherTests: XCTestCase {
         XCTAssertEqual(tracker.consume(frame(offset: 130, sourceWidth: 1280), at: 2.1), .paused(.incompatibleSize))
     }
 
+    func thinDarkText(offset: Int, changed: Bool = false) -> GrayFrame {
+        let width = 128, height = 480
+        var pixels = [UInt8](repeating: 24, count: width * height)
+        for y in 0..<height {
+            let row = y + offset, line = row / 60, glyphY = row % 60
+            if glyphY >= 12 && glyphY < 26 {
+                for x in stride(from: 17, to: 105, by: 2) {
+                    var value = UInt64(line * 619 + x * 37 + glyphY * 11 + (changed ? 999 : 1)) &* 0x9E3779B97F4A7C15
+                    value = (value ^ (value >> 30)) &* 0xBF58476D1CE4E5B9
+                    if value & 3 == 0 { pixels[y * width + x] = 180 }
+                }
+            }
+        }
+        return GrayFrame(width: width, height: height, pixels: pixels, sourceWidth: 1524)
+    }
+    func testThinDarkTextCannotDisappearBetweenSampleColumns() {
+        for shift in [1, 7, 39, 85] {
+            XCTAssertEqual(matcher.match(previous: thinDarkText(offset: 0), next: thinDarkText(offset: shift)), .append(rows: shift))
+        }
+    }
+    func testSparseDifferentTextCannotBeAcceptedAsOverlap() {
+        let result = matcher.match(previous: thinDarkText(offset: 0), next: thinDarkText(offset: 45, changed: true))
+        XCTAssertFalse({ if case .append = result { return true }; return false }())
+        XCTAssertFalse(result == .duplicate)
+    }
+
+    func testVerySparseTextIsNotDuplicate() {
+        func page(_ offset: Int) -> GrayFrame {
+            let width = 128, height = 480
+            var pixels = [UInt8](repeating: 24, count: width * height)
+            for y in 0..<height where (y + offset) % 60 == 10 {
+                let line = (y + offset) / 60
+                pixels[y * width + (line * 17 + 31) % width] = 180
+            }
+            return GrayFrame(width: width, height: height, pixels: pixels)
+        }
+        XCTAssertEqual(matcher.match(previous: page(0), next: page(1)), .append(rows: 1))
+    }
+
 }
