@@ -25,7 +25,17 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: .module
         if CommandLine.arguments.contains("--overlay-demo") {
             buildMainMenu()
             let screen = NSScreen.main!.visibleFrame
-            present(makeDemoImage(), region: CGRect(x: screen.midX - 300, y: screen.midY - 150, width: 600, height: 420), allowScroll: true)
+            let demo = makeDemoImage()
+            let image = ProcessInfo.processInfo.environment["KIRK_DOCUMENTATION_DIR"] != nil
+                ? demo.cropping(to: CGRect(x: 0, y: 0, width: demo.width, height: Int(Double(demo.width) * 0.54)))! : demo
+            present(image, region: CGRect(x: screen.midX - 300, y: screen.midY - 150, width: 600, height: 420), allowScroll: true)
+            if let directory = ProcessInfo.processInfo.environment["KIRK_DOCUMENTATION_DIR"], let editor {
+                do {
+                    try writeDocumentationEditor(editor, to: URL(fileURLWithPath: directory).appendingPathComponent("editor.png"))
+                    NSApp.terminate(nil)
+                } catch { fputs("文档界面导出失败：\(error)\n", stderr); exit(1) }
+                return
+            }
             if let number = editor?.diagnosticToolbarViews.first?.window?.windowNumber { print("OVERLAY TOOLBAR WINDOW: \(number)"); fflush(stdout) }
             return
         }

@@ -34,7 +34,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
         var cg = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
                          space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
                          provider: CGDataProvider(data: Data(pixels) as CFData)!, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
-        if ProcessInfo.processInfo.environment["KIRK_SCROLL_FIXTURE_STYLE"] == "dark-text" {
+        let showcase = ProcessInfo.processInfo.environment["KIRK_SCROLL_FIXTURE_STYLE"] == "showcase"
+        if showcase || ProcessInfo.processInfo.environment["KIRK_SCROLL_FIXTURE_STYLE"] == "dark-text" {
             let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
                                 space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
             ctx.setFillColor(CGColor(gray: 0.09, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
@@ -46,7 +47,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
                     NSColor(calibratedRed: 0.12, green: 0.3, blue: 0.56, alpha: 1).setFill()
                     NSBezierPath(roundedRect: CGRect(x: 170 * scale, y: CGFloat(height) - top - 38 * scale, width: CGFloat(width) - 205 * scale, height: 46 * scale), xRadius: 12 * scale, yRadius: 12 * scale).fill()
                 }
-                let text = ["第 \(line) 段：连续滚动，保留文字与段落间距。", "• ScreenCaptureKit 测试 \(line * 7919)，浅色细字 / dark theme", "收到消息 \(line)：正文较短。", "let offset = \(line * 37);  // 不应重复，也不应缺行"] [line % 4]
+                let showcaseLines = ["Kirk Screenshot", "把截图变成一件顺手的小事。", "01  随时唤起", "菜单栏常驻，按下快捷键就能开始。", "不用先打开微信，也不用切换应用。", "02  连续滚动", "框选正文，像平时一样向下滚动。", "自动捕获与拼接，预览一直看得见。", "03  复制就走", "回车直接复制，需要时再编辑。", "保存 PNG，把完整内容分享出去。", "04  内容留在本机", "无需注册，不上传截图。", "默认中文，使用原生 macOS 控件。", "05  少一点打扰", "正常滚动保持安静，出错再提示。"]
+                let text = showcase ? showcaseLines[line % showcaseLines.count] : ["第 \(line) 段：连续滚动，保留文字与段落间距。", "• ScreenCaptureKit 测试 \(line * 7919)，浅色细字 / dark theme", "收到消息 \(line)：正文较短。", "let offset = \(line * 37);  // 不应重复，也不应缺行"] [line % 4]
                 (text as NSString).draw(at: CGPoint(x: CGFloat(line % 7 == 4 ? 190 : 30) * scale, y: CGFloat(height) - top - 24 * scale),
                     withAttributes: [.font: NSFont.systemFont(ofSize: 15 * scale), .foregroundColor: NSColor(calibratedWhite: 0.86, alpha: 1)])
             }
@@ -71,7 +73,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         try! JSONSerialization.data(withJSONObject: info).write(to: directory.appendingPathComponent("ready.json"), options: .atomic)
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
             guard let self, FileManager.default.fileExists(atPath: self.directory.appendingPathComponent("go").path), self.position < 300 else { return }
-            self.position = min(300, self.position + (ProcessInfo.processInfo.environment["KIRK_SCROLL_FIXTURE_STYLE"] == "dark-text" ? 2.35 : 5))
+            self.position = min(300, self.position + (ProcessInfo.processInfo.environment["KIRK_SCROLL_FIXTURE_STYLE"] != nil ? 2.35 : 5))
             scroll.contentView.scroll(to: CGPoint(x: 0, y: self.position)); scroll.reflectScrolledClipView(scroll.contentView)
             scroll.displayIfNeeded()
             let progress: [String: Double] = ["position": self.position, "origin": scroll.contentView.bounds.origin.y]

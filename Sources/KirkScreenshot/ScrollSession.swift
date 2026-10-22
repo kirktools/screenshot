@@ -38,12 +38,19 @@ private final class ScrollPreviewCanvas: NSView {
     override var isFlipped: Bool { true }
     override func draw(_ dirtyRect: NSRect) {
         NSColor.underPageBackgroundColor.setFill(); bounds.fill()
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current?.shouldAntialias = false
         var top: CGFloat = 0
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
         for piece in pieces {
             let height = CGFloat(piece.addedRows) * zoom
-            let rect = CGRect(x: 0, y: top, width: CGFloat(piece.image.width) * zoom, height: height)
-            if rect.intersects(dirtyRect) {
-                piece.image.nsImage.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            // 相邻条带共享同一条物理像素边界，避免缩略缩放时逐段抗锯齿产生细横线。
+            let start = (top * scale).rounded() / scale
+            let end = ((top + height) * scale).rounded() / scale
+            let rect = CGRect(x: 0, y: start, width: CGFloat(piece.image.width) * zoom, height: end - start)
+            if rect.height > 0 && rect.intersects(dirtyRect) {
+                piece.image.nsImage.draw(in: rect, from: .zero, operation: .copy, fraction: 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.none])
             }
             top += height
         }
@@ -78,6 +85,9 @@ private final class ScrollPreviewCanvas: NSView {
     private var previewHeight: NSLayoutConstraint!
     private var panelWidth: NSLayoutConstraint!
     private let panel: PassivePanel
+    private let notice = PassivePanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    private var noticeWidth: NSLayoutConstraint!
+    private var showsUI = false
     private let status = NSTextField(wrappingLabelWithString: "准备捕获…")
     private let preview = NSScrollView()
     private let previewCanvas = ScrollPreviewCanvas()
@@ -90,13 +100,16 @@ private final class ScrollPreviewCanvas: NSView {
     }
     var diagnosticControls: [NSView] {
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
-        return panel.contentView.map(descendants) ?? []
+        return (panel.contentView.map(descendants) ?? []) + (notice.contentView.map(descendants) ?? [])
     }
     var diagnosticPreview: (visible: Bool, width: CGFloat, contentHeight: CGFloat, viewportHeight: CGFloat, originY: CGFloat) {
         (!preview.isHidden, preview.frame.width, previewCanvas.frame.height, preview.contentSize.height, preview.contentView.bounds.origin.y)
     }
     var diagnosticMoreMenu: NSMenu { moreMenu }
     var diagnosticPanelSize: CGSize { panel.frame.size }
+    var diagnosticNotice: (visible: Bool, text: String, panelFrame: CGRect, previewFrame: CGRect, frame: CGRect) {
+        (!status.isHidden, status.stringValue, panel.frame, preview.convert(preview.bounds, to: nil), notice.frame)
+    }
     var completion: ((CGImage?, ScrollOutputAction) -> Void)?
     init(provider: RegionCaptureProvider, region: CGRect, hotkeys: HotkeyRegistry, clipboard: NSPasteboard = .general) {
         self.provider = provider; self.region = region; self.hotkeys = hotkeys; self.clipboard = clipboard
@@ -106,7 +119,13 @@ private final class ScrollPreviewCanvas: NSView {
         panel.title = "滚动捕获"; panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1); panel.backgroundColor = .clear; panel.isOpaque = false; panel.hasShadow = true; panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
-        status.font = .systemFont(ofSize: 13); status.maximumNumberOfLines = 3
+        status.font = .systemFont(ofSize: 13); status.maximumNumberOfLines = 0
+        notice.title = "长截图提示"; notice.level = NSWindow.Level(rawValue: panel.level.rawValue + 1)
+        notice.backgroundColor = .clear; notice.isOpaque = false; notice.hasShadow = true
+        notice.hidesOnDeactivate = false; notice.ignoresMouseEvents = true; notice.isReleasedWhenClosed = false
+        notice.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        noticeWidth = status.widthAnchor.constraint(equalToConstant: 336); noticeWidth.isActive = true
+        notice.contentView = captureToolbar(views: [status])
         preview.hasVerticalScroller = true; preview.autohidesScrollers = true; preview.scrollerStyle = .overlay
         preview.verticalScrollElasticity = .none; preview.horizontalScrollElasticity = .none
         preview.documentView = previewCanvas
@@ -129,7 +148,7 @@ private final class ScrollPreviewCanvas: NSView {
         finish.contentTintColor = .systemGreen; cancel.contentTintColor = .systemRed
         let spacer = NSView(); spacer.setContentHuggingPriority(.init(1), for: .horizontal)
         let row = NSStackView(views: [more, spacer, edit, save, cancel, finish]); row.spacing = 6
-        let stack = NSStackView(views: [status, count, preview, row]); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 8; stack.detachesHiddenViews = true
+        let stack = NSStackView(views: [count, preview, row]); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 8; stack.detachesHiddenViews = true
         preview.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         panelWidth = stack.widthAnchor.constraint(equalToConstant: 296); panelWidth.isActive = true
@@ -172,10 +191,25 @@ private final class ScrollPreviewCanvas: NSView {
     @objc private func toggleDetails(_ sender: NSMenuItem) {
         count.isHidden.toggle(); sender.state = count.isHidden ? .off : .on; positionPanel()
     }
+    /// 提示独立于预览布局，只在确定的异常/操作失败时出现，不抢焦点或滚轮。
     private func showStatus(_ message: String?) {
-        let hidden = message == nil
-        status.stringValue = message ?? ""; let changed = status.isHidden != hidden; status.isHidden = hidden
-        if changed { positionPanel() }
+        guard let message else {
+            status.stringValue = ""; status.isHidden = true; notice.orderOut(nil); return
+        }
+        guard status.isHidden || status.stringValue != message else { return }
+        status.stringValue = message; status.isHidden = false
+        let screen = NSScreen.screens.first(where: { $0.frame.contains(region) }) ?? NSScreen.main!
+        let bounds = screen.visibleFrame
+        let width = min(380, bounds.width - 16)
+        noticeWidth.constant = width - 24
+        notice.contentView?.layoutSubtreeIfNeeded()
+        let height = min(bounds.height - 16, notice.contentView!.fittingSize.height)
+        let x = min(max(region.midX - width / 2, bounds.minX + 8), bounds.maxX - width - 8)
+        // 有空间时放在选区上方，否则悬浮在选区内；不参与预览面板的尺寸计算。
+        let above = region.maxY + 10
+        let y = above + height <= bounds.maxY - 8 ? above : max(bounds.minY + 8, region.maxY - height - 10)
+        notice.setFrame(CGRect(x: x, y: y, width: width, height: height), display: true)
+        if showsUI { notice.orderFrontRegardless() }
     }
 
     func start(registerHotkeys: Bool = true, showPanel: Bool = true) -> Bool {
@@ -183,6 +217,7 @@ private final class ScrollPreviewCanvas: NSView {
             guard hotkeys.register("session.finish", shortcut: Shortcut(key: 36, modifiers: 0, label: "↩"), action: { [weak self] in self?.finishCapture() }) else { return false }
             guard hotkeys.register("session.cancel", shortcut: Shortcut(key: 53, modifiers: 0, label: "Esc"), action: { [weak self] in self?.cancelCapture() }) else { hotkeys.unregister("session.finish"); return false }
         }
+        showsUI = showPanel
         if showPanel { boundary.show(); panel.orderFrontRegardless() }
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
@@ -249,7 +284,7 @@ private final class ScrollPreviewCanvas: NSView {
             showStatus(nil)
         case .recovering:
             pending = true; confirmPartial = false
-            showStatus("正在恢复接缝…可稍停或回滚一点；已确认的内容已保留。")
+            if !paused { showStatus(nil) }
         case .paused(let reason): pending = true; pause(message(reason), automatically: reason != .incompatibleSize)
         }
     }
@@ -301,7 +336,7 @@ private final class ScrollPreviewCanvas: NSView {
         generation += 1
         processor = ScrollProcessor(anchor: pieces.last?.frame)
         pending = !pieces.isEmpty; confirmPartial = false; paused = false; automaticRecovery = false
-        showStatus("重新接续中…请回到预览末尾附近，保留重叠内容。")
+        showStatus(nil)
         if let stream { stream.setPaused(false) } else { launchStream() }
     }
     @objc func undo() {
@@ -313,7 +348,7 @@ private final class ScrollPreviewCanvas: NSView {
         processor = ScrollProcessor(anchor: pieces.last?.frame)
         pending = true; confirmPartial = false
         updatePreview()
-        pause("已撤销。请回滚至保留片段末尾附近，会自动接续。", automatically: true)
+        resume()
     }
     @objc func finishCapture() { finish(action: .copy) }
     @objc private func finishForEditing() { finish(action: .edit) }
@@ -322,7 +357,7 @@ private final class ScrollPreviewCanvas: NSView {
         guard !stopped, !finishing else { return }
         guard !pieces.isEmpty else { showStatus("尚未取得首帧，请稍候；Esc 可取消。"); return }
         finishing = true
-        showStatus("正在处理最后画面…")
+        showStatus(nil)
         // 先停止生产，再排空最多两帧的队列，避免回车时丢掉尚在处理的末段。
         let source = stream
         let captureTask = task
@@ -361,7 +396,7 @@ private final class ScrollPreviewCanvas: NSView {
         Task { await source?.stop() }
         hotkeys.unregister("session.finish"); hotkeys.unregister("session.cancel")
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver); self.screenObserver = nil }
-        boundary.close(); panel.orderOut(nil); panel.close(); pieces.removeAll(); previewCanvas.pieces.removeAll(); memoryBytes = 0
+        boundary.close(); notice.orderOut(nil); notice.close(); panel.orderOut(nil); panel.close(); pieces.removeAll(); previewCanvas.pieces.removeAll(); memoryBytes = 0
         processor = ScrollProcessor()
     }
 }

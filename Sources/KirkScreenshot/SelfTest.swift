@@ -132,10 +132,17 @@ import StitchCore
     NSColor.white.setFill(); CGRect(x: 0, y: 0, width: 1000, height: 1400).fill()
     ("Kirk Screenshot" as NSString).draw(at: CGPoint(x: 60, y: 55), withAttributes: [.font: NSFont.systemFont(ofSize: 40, weight: .bold), .foregroundColor: NSColor.black])
     ("本机截图 · 手动滚动 · 自动拼接" as NSString).draw(at: CGPoint(x: 60, y: 125), withAttributes: [.font: NSFont.systemFont(ofSize: 26), .foregroundColor: NSColor.darkGray])
-    for i in 0..<12 {
-        let y = 215 + i * 90
-        ("第 \(i + 1) 段：这是一张用于编辑验收的合成图片。" as NSString).draw(at: CGPoint(x: 60, y: y), withAttributes: [.font: NSFont.systemFont(ofSize: 22), .foregroundColor: NSColor.black])
-        ("PNG 导出保留图片像素，打码使用不可逆实心覆盖。" as NSString).draw(at: CGPoint(x: 60, y: y + 35), withAttributes: [.font: NSFont.systemFont(ofSize: 18), .foregroundColor: NSColor.gray])
+    let sections = [
+        ("随时唤起", "菜单栏常驻。框选区域，立刻开始截图。"),
+        ("轻量标注", "箭头、形状、文字、裁剪和打码，直接在原位完成。"),
+        ("连续长截图", "像平时一样向下滚动，自动捕获并拼接。"),
+        ("复制就走", "回车直接复制，需要时再进入编辑。"),
+        ("内容留在本机", "无需注册，不上传截图，也不依赖微信。")
+    ]
+    for (index, section) in sections.enumerated() {
+        let y = 230 + index * 180
+        (section.0 as NSString).draw(at: CGPoint(x: 60, y: y), withAttributes: [.font: NSFont.systemFont(ofSize: 28, weight: .semibold), .foregroundColor: NSColor.black])
+        (section.1 as NSString).draw(at: CGPoint(x: 60, y: y + 56), withAttributes: [.font: NSFont.systemFont(ofSize: 23), .foregroundColor: NSColor.darkGray])
     }
     image.unlockFocus()
     return image.cgImage(forProposedRect: nil, context: nil, hints: nil)!
@@ -222,4 +229,26 @@ import StitchCore
     guard NSApp.windows.filter({ $0.title == window.title }).count == 1 else { throw CaptureError.message("重复打开生成了多个设置窗口") }
     window.close()
     print("Startup status window, direct capture buttons and reopen behavior verified")
+}
+
+/// 仅渲染本应用控件与生成内容，供文档使用；不读取桌面或私人聊天。
+@MainActor func writeDocumentationEditor(_ editor: EditorController, to url: URL) throws {
+    guard let content = editor.window?.contentView, let toolbar = editor.diagnosticToolbarViews.first else { throw CaptureError.message("编辑界面尚未就绪") }
+    let factor = CGFloat(editor.canvas.state.image.width) / 1000
+    editor.canvas.apply(Annotation(tool: .rectangle, start: CGPoint(x: 42 * factor, y: 205 * factor), end: CGPoint(x: 945 * factor, y: 345 * factor), color: .blue, lineWidth: 5 * factor))
+    editor.canvas.apply(Annotation(tool: .arrow, start: CGPoint(x: 805 * factor, y: 420 * factor), end: CGPoint(x: 655 * factor, y: 350 * factor), color: .blue, lineWidth: 5 * factor))
+    let geometry = editor.diagnosticGeometry
+    let extent = geometry.image.union(geometry.toolbar).insetBy(dx: -24, dy: -24)
+    let scale = 2.0
+    let ctx = CGContext(data: nil, width: Int(extent.width * scale), height: Int(extent.height * scale), bitsPerComponent: 8, bytesPerRow: 0,
+                        space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.setFillColor(CGColor(gray: 0.12, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: ctx.width, height: ctx.height))
+    for (view, frame) in [(content, geometry.image), (toolbar, geometry.toolbar)] {
+        view.layoutSubtreeIfNeeded()
+        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw CaptureError.message("无法捕获原生控件") }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        guard let image = bitmap.cgImage else { throw CaptureError.message("无法读取控件图像") }
+        ctx.draw(image, in: CGRect(x: (frame.minX - extent.minX) * scale, y: (frame.minY - extent.minY) * scale, width: frame.width * scale, height: frame.height * scale))
+    }
+    try ctx.makeImage()!.png().write(to: url, options: .atomic)
 }

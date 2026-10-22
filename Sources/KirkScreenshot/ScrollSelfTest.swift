@@ -1,5 +1,7 @@
 import AppKit
 import StitchCore
+import ImageIO
+import UniformTypeIdentifiers
 
 /// 合成连续帧经真实会话、后台识别、条带存储、收尾与导出；不读取桌面或占用会话热键。
 @MainActor private final class FixtureStream: RegionFrameStream {
@@ -118,16 +120,25 @@ import StitchCore
     try await Task.sleep(for: .milliseconds(30))
     otherProvider.source.send(image(0))
     try await wait { other.diagnosticSnapshot.count == 1 }
+    let stableLayout = other.diagnosticNotice
     otherProvider.source.send(image(600))
     try await wait { other.diagnosticSnapshot.pending }
+    try require(!other.diagnosticNotice.visible, "短暂失配不应显示滚动提示")
+    try require(other.diagnosticNotice.panelFrame == stableLayout.panelFrame && other.diagnosticNotice.previewFrame == stableLayout.previewFrame,
+                "短暂失配改变了预览位置")
     otherProvider.source.send(image(40))
     try await wait { other.diagnosticSnapshot.count == 2 }
     try require(!other.diagnosticSnapshot.pending, "短暂失配未恢复")
     otherProvider.source.send(image(0))
     try await wait { other.diagnosticSnapshot.paused }
+    try require(other.diagnosticNotice.visible && !other.diagnosticNotice.text.isEmpty, "明确失配后没有悬浮提示")
+    try require(other.diagnosticNotice.panelFrame == stableLayout.panelFrame && other.diagnosticNotice.previewFrame == stableLayout.previewFrame,
+                "异常提示挤动了预览或工具栏")
     // 超时后仍应监听；回到已确认锚点附近，无需点击重试。
     otherProvider.source.send(image(60))
     try await wait { other.diagnosticSnapshot.count == 3 && !other.diagnosticSnapshot.paused }
+    try require(!other.diagnosticNotice.visible && other.diagnosticNotice.panelFrame == stableLayout.panelFrame && other.diagnosticNotice.previewFrame == stableLayout.previewFrame,
+                "恢复后提示未消失，或预览产生了布局跳动")
     other.undo()
     try require(other.diagnosticSnapshot.count == 2, "自动恢复后撤销失败")
     other.undo()
@@ -201,9 +212,13 @@ import StitchCore
     process.executableURL = URL(fileURLWithPath: executable); process.arguments = [directory.path]
     try process.run()
     defer { if process.isRunning { process.terminate() }; try? FileManager.default.removeItem(at: directory) }
+    var recordDocumentationFrame: (() -> Void)?
+    var documentationFrames: [CGImage] = []
+    var lastDocumentationFrame = 0.0
     func wait(_ condition: () -> Bool, seconds: Double = 8) async throws {
         let end = ProcessInfo.processInfo.systemUptime + seconds
         while !condition() {
+            recordDocumentationFrame?()
             guard process.isRunning else { throw CaptureError.message("测试页面进程已退出") }
             guard ProcessInfo.processInfo.systemUptime < end else { throw CaptureError.message("真实滚动回归超时") }
             try await Task.sleep(for: .milliseconds(20))
@@ -228,6 +243,16 @@ import StitchCore
     defer { session.cancelCapture() }
     _ = session.start(registerHotkeys: false, showPanel: true)
     try await wait { session.diagnosticSnapshot.count > 0 }
+    if ProcessInfo.processInfo.environment["KIRK_DOCUMENTATION_DIR"] != nil {
+        recordDocumentationFrame = {
+            let now = ProcessInfo.processInfo.systemUptime
+            guard now - lastDocumentationFrame >= 0.15, documentationFrames.count < 64,
+                  let view = session.diagnosticControls.first,
+                  let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            if let image = bitmap.cgImage { documentationFrames.append(image); lastDocumentationFrame = now }
+        }
+    }
     try Data().write(to: directory.appendingPathComponent("go"))
     let expectedHeight = Int((info["height"]! * info["scale"]!) + info["offset"]!)
     do { try await wait { session.diagnosticSnapshot.height >= expectedHeight || session.diagnosticSnapshot.paused } }
@@ -236,6 +261,14 @@ import StitchCore
         throw CaptureError.message("真实滚动未完成：\(session.diagnosticSnapshot)，fixture=\(progress)，\(error.localizedDescription)")
     }
     guard !session.diagnosticSnapshot.paused else { throw CaptureError.message("真实滚动发生暂停：\(session.diagnosticSnapshot)，\(session.diagnosticControls.compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: " / "))") }
+    var documentationPreview: Data?
+    if ProcessInfo.processInfo.environment["KIRK_DOCUMENTATION_DIR"] != nil,
+       let view = session.diagnosticControls.first,
+       let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        documentationPreview = bitmap.representation(using: .png, properties: [:])
+    }
+    recordDocumentationFrame = nil
     session.finishCapture()
     try await wait { complete }
     guard let result, result.height == expectedHeight else { throw CaptureError.message("真实滚动的最终高度不正确") }
@@ -256,5 +289,21 @@ import StitchCore
     }
     guard worstRow < 1, worstColumn < 1 else { throw CaptureError.message("真实输出含错行或边框污染：row=\(worstRow), column=\(worstColumn)") }
     guard difference < 1 else { throw CaptureError.message("真实屏幕输出与原始测试页面不一致：亮度误差 \(difference)") }
+    // 文档素材仅在输出与生成参考完全一致后写出，避免把遮挡内容带进仓库。
+    if let directory = ProcessInfo.processInfo.environment["KIRK_DOCUMENTATION_DIR"] {
+        guard difference == 0, let documentationPreview else { throw CaptureError.message("文档素材与参考不完全一致，未导出") }
+        try documentationPreview.write(to: URL(fileURLWithPath: directory).appendingPathComponent("scroll-preview.png"), options: .atomic)
+        try result.png().write(to: URL(fileURLWithPath: directory).appendingPathComponent("scroll-result.png"), options: .atomic)
+        let gifURL = URL(fileURLWithPath: directory).appendingPathComponent("scrolling.gif")
+        if !documentationFrames.isEmpty,
+           let gif = CGImageDestinationCreateWithURL(gifURL as CFURL, UTType.gif.identifier as CFString, documentationFrames.count, nil) {
+            CGImageDestinationSetProperties(gif, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+            for (index, frame) in documentationFrames.enumerated() {
+                let delay = index == documentationFrames.count - 1 ? 1.5 : 0.15
+                CGImageDestinationAddImage(gif, frame, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: delay]] as CFDictionary)
+            }
+            guard CGImageDestinationFinalize(gif) else { throw CaptureError.message("无法生成滚动演示 GIF") }
+        }
+    }
     print("LIVE SCROLL PASSED: SCStream + native scrolling window, \(result.width)x\(result.height), mean luminance error=\(difference)")
 }
