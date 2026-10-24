@@ -1,50 +1,45 @@
-name: Prepare Release
-# 手动选择增量；不会因普通 push 自动发布。默认生成 Draft 供维护者验收。
+name: Release
+# 维护者推送版本标签即确认发布；普通 master push 只跑 CI。
 on:
-  workflow_dispatch:
-    inputs:
-      bump:
-        description: 'SemVer 增量'
-        type: choice
-        options: [patch, minor, major]
-        default: patch
-        required: true
+  push:
+    tags: ['v*']
 permissions:
   contents: write
 concurrency:
-  group: release-master
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   release:
-    if: github.repository == 'kirktools/screenshot' && github.ref == 'refs/heads/master'
+    if: github.repository == 'kirktools/screenshot' && github.event.deleted == false
     runs-on: macos-15
-    environment: release
     timeout-minutes: 30
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: master
           fetch-depth: 0
+          persist-credentials: false
       - name: 检查 Xcode 与 Swift 工具链
         run: |
           test -d "$DEVELOPER_DIR"
           xcodebuild -version
           swift --version
+      - name: 校验标签与版本
+        id: version
+        run: |
+          python3 - <<'PYTHON'
+          import os, re
+          from pathlib import Path
+          version = Path('VERSION').read_text().strip()
+          if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version) or os.environ['GITHUB_REF_NAME'] != f'v{version}':
+              raise SystemExit('标签必须为 vX.Y.Z，并与 VERSION 一致')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'value={version}\n')
+          PYTHON
+          git merge-base --is-ancestor HEAD origin/master
       - name: 算法测试
         run: swift test
-      - name: 自动增加版本
-        id: version
-        env:
-          BUMP: ${{ inputs.bump }}
-        run: |
-          next=$(python3 scripts/bump-version.py "$BUMP")
-          if git rev-parse "v$next" >/dev/null 2>&1; then
-            echo "版本标签已存在: $next" >&2
-            exit 1
-          fi
-          echo "value=$next" >> "$GITHUB_OUTPUT"
       - name: 构建 universal 应用（ad-hoc 签名，尚未公证）
         env:
           UNIVERSAL: '1'
@@ -56,28 +51,18 @@ jobs:
           'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' --self-test
           'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' --scroll-session-self-test
           shasum -a 256 dist/*.zip > dist/SHA256SUMS.txt
-      - name: 上传构建产物（即使远端分支保护阻止提交仍保留）
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - name: 上传构建产物
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-${{ steps.version.outputs.value }}
           path: |
             dist/*.zip
             dist/SHA256SUMS.txt
-      - name: 提交版本和标签（构建全部通过后）
-        env:
-          VERSION: ${{ steps.version.outputs.value }}
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add VERSION
-          git commit -m "chore: release v$VERSION"
-          git tag "v$VERSION"
-          git push --atomic origin HEAD:master "v$VERSION"
-      - name: 创建 Draft Release
+      - name: 正式发布 Release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.value }}
         run: |
           gh release create "v$VERSION" dist/*.zip dist/SHA256SUMS.txt \
-            --draft --verify-tag --title "Kirk Screenshot v$VERSION" \
-            --notes-file docs/RELEASE-NOTES.md
+            --verify-tag --title "Kirk Screenshot v$VERSION" \
+            --notes-file docs/RELEASE-NOTES.md --generate-notes

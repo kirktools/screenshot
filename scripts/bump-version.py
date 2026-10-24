@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 parser = argparse.ArgumentParser()
 parser.add_argument("part", choices=["patch", "minor", "major"])
+parser.add_argument("--dry-run", action="store_true", help="只打印下一版本，不写入文件")
 args = parser.parse_args()
 path = Path(__file__).resolve().parent.parent / "VERSION"
 current = path.read_text().strip()
@@ -15,5 +16,6 @@ if args.part == "major": major, minor, patch = major + 1, 0, 0
 elif args.part == "minor": minor, patch = minor + 1, 0
 else: patch += 1
 version = f"{major}.{minor}.{patch}"
-path.write_text(version + "\n")
+if not args.dry_run:
+    path.write_text(version + "\n")
 print(version)

@@ -1,28 +1,50 @@
 # CI、版本与发布
 
-CI 随 master push 和 PR 自动执行；发布需要手动触发，默认只创建 Draft Release。
+CI 随 master push 和 PR 自动执行；维护者运行发布脚本推送版本标签后，自动测试、打包并正式发布。
 
 ## 自动测试
 
 `.github/workflows/ci.yml` 对 master push 与 PR 执行 Swift 算法测试、原生离屏渲染/PNG 自测、release 构建，并上传 14 天产物。矩阵：macos-15（arm64）与 macos-15-intel（x86_64）；CI 和 Release 均通过 DEVELOPER_DIR 固定 Xcode 16.4 / Swift 6.1，不依赖 runner 默认工具链，先检查并打印实际版本。Xcode 路径依据官方 [ARM 镜像清单](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md) 与 [Intel 镜像清单](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md)。应用最低编译目标仍为 macOS 14，macOS 14 实际运行仍需人工验收；runner 标签依据 [GitHub 官方说明](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。云端 CI 没有交互式权限验收，不能证明真实窗口截屏成功。workflow 仅给读取仓库权限，PR 不使用发布凭据。Actions 使用固定 commit SHA，对应官方 [checkout v7.0.1](https://github.com/actions/checkout/releases/tag/v7.0.1) 和 [upload-artifact v7.0.0](https://github.com/actions/upload-artifact/releases/tag/v7.0.0)，Dependabot 可提交升级 PR。
 
-## 自动加版本与打包
+## 一条命令发布
 
-原生渲染与连续滚动回归运行打包后的 Release 应用；算法测试仍使用 Debug 并收集覆盖率。连续会话按约 30fps 投递合成帧，未优化的 Intel Debug 在本机复现处理积压、丢帧及末尾保护确认，不能作为分发版本的实时处理验收。测试仍检查逐像素结果、末帧排空、恢复与导出，不跳过 Intel。
+```bash
+make release                     # 默认 patch：0.1.0 → 0.1.1
+make release BUMP=minor          # minor：0.1.0 → 0.2.0
+make release BUMP=major          # major：0.1.0 → 1.0.0
+make release-dry-run BUMP=minor  # 计算并预览，不联网、不改文件、不推送
+```
 
-当前建议显式触发一次 Release 工作流，默认 patch +1；不在每个 commit 上改版本，避免噪声与竞争。
+这是 Make 的标准语法，与 Swift 无关。`release` 是任务名，`BUMP=minor` 覆盖 Makefile 中 `BUMP ?= patch` 的默认值。`BUMP=minor make release` 通过环境变量传入，在当前 Makefile 下也有效。
 
-1. 确认 master 的 CI 和人工验收通过。
-2. 在 GitHub 仓库设置创建 `release` Environment，建议要求维护者审核；开启 Actions（后续决定发布时再做）。
-3. 从 master 手动运行 `Prepare Release`，选择 patch/minor/major。
-4. 工作流先跑测试，更新唯一版本源 `VERSION`，构建 universal app、检查双架构、执行包内自测、生成 SHA256SUMS。
-5. 构建成功后才提交版本与标签，以 atomic push 一并写入远端，然后创建 **Draft Release**，等待维护者填写具体变更、安装验收并手动发布。首次触发 patch 会从 0.1.0 升为 0.1.1。
+`make release --dry-run` 是 Make 自己的预演：只打印将调用的脚本，不执行脚本，也不会计算版本；`make release-dry-run` 则实际调用脚本的只读预览。直接运行脚本也可以：`./scripts/release.sh --minor --dry-run`。
 
-并发发布串行处理；从最新 master checkout，不允许在 fork 或非 master 上发布。构建失败不提交版本；远端分支在构建期间前进，普通 push 会安全失败，不会强推。失败前构建产物已上传 Artifact。若 branch protection 禁止 github-actions bot 直接写 master，当前自动提交阶段会失败：应把版本提升改为审核 PR 流程，或明确配置受限发布身份；不要为了跑通而关闭分支保护。GITHUB_TOKEN 推送产生的提交通常不再次触发 push workflow，发布工作流已自行测试。
+### 实际流程
 
-个人维护阶段可先对 master 启用禁止删除、禁止强推，保留普通推送。公开协作后再要求 PR 和双架构 CI，并同步改造上述版本提交流程。当前私有组织仓库的套餐不支持分支保护；公开仓库可在免费套餐配置，私有组织仓库需要支持该功能的 Team / Enterprise 套餐。参见 [GitHub 分支保护说明](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)。不要仅为消除提醒而改变仓库可见性。
+运行发布命令即表示确认当前已提交代码可以正式发布，无需二次确认或手动发布草稿：
 
-如果版本和标签已写入但 Draft 创建失败，可以从 Actions 下载产物，核对 SHA256SUMS 后手工为已有 tag 建 Draft，**不要重跑自动递增步骤**。脚本不会自动修改 CHANGELOG；发布人需编写清晰变更说明，当前 `docs/RELEASE-NOTES.md` 是需补充的初始模板。
+1. 在 master 上提交开发改动，确认 CI 与真实桌面验收通过。脚本要求工作区干净，只允许推送 `kirktools/screenshot`。
+2. 脚本读取 VERSION，检查本地 master 未落后或分叉、版本标签未占用，仅修改 VERSION 并生成 `chore: release vX.Y.Z` 提交。
+3. 生成注释标签 `vX.Y.Z`，通过一次 `git push --atomic` 推送 master 和该标签；已经提交但尚未推送的 master 改动会一起推送，不自动提交其他文件。
+4. 标签 push 触发 Release 工作流。检出标签指向的代码，校验标签与 VERSION 一致且提交属于 master；不会改为构建之后前进的 master。
+5. 算法测试通过后构建 universal 应用，验证双架构、包内渲染/PNG 与连续滚动会话，生成校验和并上传 Artifact。
+6. 全部成功后，直接创建正式 GitHub Release，附带 zip、SHA256SUMS 和自动生成的版本变更记录。
+
+本机只需要 git、python3 以及平时 `git push` 的 SSH / HTTPS 认证，**无需安装或登录 gh**。云端使用 GitHub 自动提供的 GITHUB_TOKEN 调用 gh 创建 Release，不需要维护者额外存放个人 Token。标签触发依据 [GitHub 官方说明](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)。普通 master push 只跑 CI，不发布；不再有手动 workflow_dispatch 加版本流程，也不使用需要额外批准的 release Environment。
+
+README 的功能、限制和安装说明不会由脚本自动改写；发布说明由 `docs/RELEASE-NOTES.md` 通用说明加 GitHub 自动生成的提交/PR 变更记录组成。发布前如需补充说明，应先修改并提交到本次代码中。当前包仍是 ad-hoc 签名，发布成功不代表已完成 Apple 签名或公证。
+
+发布脚本回归运行 `python3 scripts/test-release.py`，使用临时本地 Git 仓库验证，不访问 GitHub，也不会真实发布。CI 会自动执行。
+
+### 失败与重试
+
+- 本地检查失败：没有版本改动或推送，按提示处理后重试。
+- 本地版本提交或标签完成但推送失败：保留现场，不自动重置用户代码。修复原因后使用脚本输出的 `git push --atomic origin HEAD:refs/heads/master refs/tags/vX.Y.Z` 重试原版本；先确认 HEAD 仍是该版本提交。不要再次递增版本，也不要强推。
+- 标签已推送但云端失败：直接在 Actions 重跑该次失败任务，仍构建同一个不可变版本。不要重新运行 release 脚本、覆盖标签或重复递增。
+- 如失败原因需要修改源码：提交修复并发布一个新版本，保留失败标签的可追溯性。
+- 如果 Release 已存在，创建步骤会失败，不会覆盖已发布文件。
+
+当前流程会直接向 master 写版本提交；个人维护阶段可先禁止删除和强推。之后若要求所有变更必须走 PR，应把版本提交改为先审核 PR、合并后再打标签；不要为了发版关闭分支保护。每个版本单独排队，不取消正在运行的同版本发布。
 
 ## 签名与公证
 
