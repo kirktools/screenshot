@@ -32,10 +32,8 @@ jobs:
           test -d "$DEVELOPER_DIR"
           xcodebuild -version
           swift --version
-      - name: 算法和渲染测试
-        run: |
-          swift test
-          .build/debug/KirkScreenshot --self-test
+      - name: 算法测试
+        run: swift test
       - name: 自动增加版本
         id: version
         env:
@@ -56,6 +54,7 @@ jobs:
           lipo 'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' -verify_arch arm64
           lipo 'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' -verify_arch x86_64
           'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' --self-test
+          'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' --scroll-session-self-test
           shasum -a 256 dist/*.zip > dist/SHA256SUMS.txt
       - name: 上传构建产物（即使远端分支保护阻止提交仍保留）
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

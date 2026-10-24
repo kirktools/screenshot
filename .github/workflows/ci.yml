@@ -30,12 +30,14 @@ jobs:
           swift --version
       - name: 算法测试
         run: swift test --enable-code-coverage
-      - name: 原生渲染与导出测试（不读取桌面）
-        run: .build/debug/KirkScreenshot --self-test
-      - name: 连续滚动会话回归（合成帧，不读取桌面）
-        run: .build/debug/KirkScreenshot --scroll-session-self-test
-      - name: 构建应用
+      # 会话回归以约 30fps 投递帧，必须使用实际分发的优化构建。
+      # 未优化的 Intel Debug 会因处理积压丢帧，触发正常的末尾保护确认。
+      - name: 构建应用（Release）
         run: scripts/build-app.sh
+      - name: 原生渲染与导出测试（不读取桌面）
+        run: "'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' --self-test"
+      - name: 连续滚动会话回归（合成帧，不读取桌面）
+        run: "'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' --scroll-session-self-test"
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: Kirk-Screenshot-${{ matrix.os }}

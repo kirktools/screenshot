@@ -207,3 +207,14 @@ GitHub 连接器无此仓库权限，本机 GitHub CLI 可以只读获取日志�
 README 改为简短产品介绍、四项功能、三步使用、安装与必要边界，原详细内容移到 docs/USAGE.md。新增 docs/images 下的真实原生控件渲染图、实际滚动拼接结果、约 240 KB 的 GIF 和重现命令。全部使用生成内容，滚动输出与参考完全一致后才写出文档素材，不包含私人聊天；没有伪造产品 UI 或添加第三方运行依赖。README 图片与本地链接均已校验。
 
 已安装同一验证通用包至 `/Users/kirk/Applications/Kirk Screenshot.app`，SHA-256 ae92414b7bac6c24f62093c5ccd4b87e4d4a5697f783608a11e635ec8c69453d。旧版备份位于 `.build/installed-backups/20261023-021445/Kirk Screenshot.app`。沿用用户授权仅刷新 Kirk 录屏记录，本轮没有再次要求 Touch ID；准确路径重新添加并退出重开，安装版设置已确认权限开启，其他应用权限保持不变。未提交、推送或发布。真实应用的异常悬浮提示鼠标/触控板体验仍需日常验收，不能以测试窗口替代所有应用验证。
+
+
+## 2026-10-23：Intel CI 会话超时与分支保护检查
+
+只读检查最新远端 run [39830811389](https://github.com/kirktools/screenshot/actions/runs/39830811389)：ARM 测试、构建和上传全部通过；Intel 算法和渲染通过，连续会话报“会话自测等待超时”。本机编译 x86_64 Debug 并经 Rosetta 复现，增加等待位置及收尾状态诊断：首轮完成等待超时，只有 247 像素/2 段，处于末尾未接续的部分导出确认状态。相同代码和输入的 x86_64 Release 完整通过，说明未优化实时处理积压导致丢帧，而非 XCTest/Swift 工具链编译问题。
+
+CI 改为算法 Debug/覆盖率测试后构建 Release 应用，再执行包内原生渲染与连续会话测试；Release 工作流也增加包内连续会话验收。没有跳过 Intel、减少帧数、放松图像比较或延长等待阈值。
+
+本机验证：20 组共享算法回归通过；通用包包含 arm64/x86_64，签名完整性通过；分别通过 arch -arm64 和 arch -x86_64 执行包内渲染/PNG 与连续会话回归，四项均通过。Intel 验证经 Rosetta，不等同物理 Intel/Xcode 16.4 runner；本机仍没有完整 Xcode，不能声称新一轮远端 CI 已通过。两个 workflow 的 YAML 解析与 git diff --check 通过。未替换已安装应用，未更改录屏权限，未提交、推送或触发发布。
+
+仓库 API 确认目前 private、默认分支 master、protected=false；rulesets API 返回套餐不支持的 403。未改变仓库可见性或远端规则。建议公开开源后先启用 master 禁止删除/强推；若之后要求 PR/状态检查，需要一并将现有版本自动提交改成 PR 流程。

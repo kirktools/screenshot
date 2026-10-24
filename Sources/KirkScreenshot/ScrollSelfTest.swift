@@ -32,10 +32,10 @@ import UniformTypeIdentifiers
     func require(_ condition: Bool, _ message: String) throws {
         if !condition { throw CaptureError.message(message) }
     }
-    func wait(_ condition: () -> Bool) async throws {
+    func wait(file: StaticString = #fileID, line: UInt = #line, _ condition: () -> Bool) async throws {
         let deadline = ProcessInfo.processInfo.systemUptime + 3
         while !condition() {
-            if ProcessInfo.processInfo.systemUptime > deadline { throw CaptureError.message("会话自测等待超时") }
+            if ProcessInfo.processInfo.systemUptime > deadline { throw CaptureError.message("会话自测等待超时：\(file):\(line)") }
             try await Task.sleep(for: .milliseconds(10))
         }
     }
@@ -93,7 +93,11 @@ import UniformTypeIdentifiers
     // 保留真正的最后一帧排空检查：末帧投递后立即完成，不等待处理。
     provider.source.send(image(322))
     session.finishCapture()
-    try await wait { completed }
+    do { try await wait { completed } }
+    catch {
+        print("结束阶段状态：\(session.diagnosticSnapshot)，采集已停止：\(provider.source.stopped)，提示：\(session.diagnosticNotice.text)")
+        throw error
+    }
     try require(provider.source.stopped, "完成后未停止采集源")
     guard let output else { throw CaptureError.message("连续滚动未生成图片") }
     let copiedPNG = try output.png()
