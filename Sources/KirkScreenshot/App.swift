@@ -160,8 +160,9 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: .module
                         guard rect.height >= 100, rect.width >= 80 else { throw CaptureError.message("长截图区域至少需要 80 × 100 点，请框选正文内容。") }
                         try self.beginScroll(rect, provider: provider)
                     } else {
-                        let image = try await provider.capture(rect)
-                        self.busy = false; self.provider = nil; self.present(image, region: rect, allowScroll: true)
+                        let frozen = try await provider.frozenCapture(containing: rect)
+                        guard let image = frozen.crop(rect) else { throw CaptureError.message("无法从屏幕快照裁取选区") }
+                        self.busy = false; self.provider = nil; self.present(image, region: rect, allowScroll: true, frozenCapture: frozen)
                     }
                 } catch { self.busy = false; self.provider = nil; showError(CaptureError.message("\(error.localizedDescription)\n若刚授予屏幕录制权限，请退出应用后重新打开。")) }
             }
@@ -187,13 +188,13 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: .module
         }
         guard session.start() else { self.session = nil; throw CaptureError.message("无法注册回车/Esc 会话快捷键") }
     }
-    private func present(_ image: CGImage, region: CGRect? = nil, allowScroll: Bool = false) {
+    private func present(_ image: CGImage, region: CGRect? = nil, allowScroll: Bool = false, frozenCapture: FrozenCapture? = nil) {
         editor?.close()
-        let controller = EditorController(image: image, region: region, allowScroll: allowScroll)
+        let controller = EditorController(image: image, region: region, allowScroll: allowScroll, frozenCapture: frozenCapture)
         editor = controller
         controller.dismissed = { [weak self] in self?.busy = false }
-        controller.requestScroll = { [weak self] in
-            guard let self, let region else { return }
+        controller.requestScroll = { [weak self, weak controller] in
+            guard let self, let region = controller?.captureRegion ?? region else { return }
             guard region.width >= 80, region.height >= 100, NSScreen.screens.contains(where: { $0.frame.contains(region) }) else {
                 self.busy = false; showError(CaptureError.message("长截图需在单一显示器内框选至少 80 × 100 点的正文区域。")); return
             }

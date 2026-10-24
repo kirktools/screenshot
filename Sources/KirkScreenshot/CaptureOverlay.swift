@@ -42,7 +42,15 @@ final class EditorCaptureWindow: NSWindow {
 
 final class EditorBackdrop: NSView {
     var cancel: (() -> Void)?
-    override func draw(_ dirtyRect: NSRect) { NSColor.black.withAlphaComponent(0.32).setFill(); bounds.fill() }
+    var frozenCapture: FrozenCapture?
+    override func draw(_ dirtyRect: NSRect) {
+        if let screenFrame = window?.frame {
+            for tile in frozenCapture?.tiles ?? [] {
+                tile.image.nsImage.draw(in: tile.region.offsetBy(dx: -screenFrame.minX, dy: -screenFrame.minY))
+            }
+        }
+        NSColor.black.withAlphaComponent(0.32).setFill(); bounds.fill()
+    }
     override func mouseDown(with event: NSEvent) { NSSound.beep() }
 }
 

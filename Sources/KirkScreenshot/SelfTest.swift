@@ -17,6 +17,7 @@ import StitchCore
     let data = Data(pixels) as CFData
     let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
                         space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue), provider: CGDataProvider(data: data)!, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+    try runCaptureResizeSelfTest(image: image)
     let a = image.cropping(to: CGRect(x: 0, y: 0, width: width, height: 260))!
     let b = image.cropping(to: CGRect(x: 0, y: 100, width: width, height: 260))!
     let match = StitchMatcher().match(previous: a.grayFrame(), next: b.grayFrame())
