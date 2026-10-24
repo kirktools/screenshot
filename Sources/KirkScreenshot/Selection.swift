@@ -26,6 +26,7 @@ struct RegionSelectionState {
     private(set) var selection: CGRect = .zero
     private var start: CGPoint?
     private var drawing = false
+    init(candidates: [CGRect]) { self.candidates = candidates }
     mutating func hover(at point: CGPoint) {
         guard start == nil else { return }
         selection = candidates.first { $0.contains(point) } ?? .zero
