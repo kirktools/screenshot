@@ -57,7 +57,7 @@ jobs:
           'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' --scroll-session-self-test
           shasum -a 256 dist/*.zip > dist/SHA256SUMS.txt
       - name: 上传构建产物（即使远端分支保护阻止提交仍保留）
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-${{ steps.version.outputs.value }}
           path: |
