@@ -263,6 +263,8 @@ import StitchCore
     }
     let delegate = AppDelegate()
     var authorized = false, requests = 0, settingsOpens = 0
+    var scheduled: [() -> Void] = []
+    delegate.schedulePermissionRequest = { scheduled.append($0) }
     delegate.permissionAccess = ScreenPermissionAccess(isAuthorized: { authorized }, request: { requests += 1; return false }, openSettings: { settingsOpens += 1 })
     delegate.openSettings()
     let window = NSApp.windows.first { $0.title == "Kirk Screenshot · 设置" && $0.isVisible }!
@@ -272,8 +274,9 @@ import StitchCore
     // 原 runModal 实现在这里不会返回；新 action 必须先返回，再异步调用系统。
     NSApp.sendAction(request.action!, to: request.target, from: request)
     try require(requests == 0 && NSApp.modalWindow == nil && !request.isEnabled, "申请按钮同步阻塞或创建了模态窗口")
-    request.performClick(nil)
-    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    NSApp.sendAction(request.action!, to: request.target, from: request)
+    try require(scheduled.count == 1, "重复点击创建了多个授权任务")
+    scheduled.removeFirst()()
     try require(requests == 1 && settingsOpens == 0 && request.isEnabled && request.title == "重新检查权限", "重复触发系统请求，或请求结束后按钮未恢复")
     request.performClick(nil)
     try require(requests == 1 && settingsOpens == 0 && NSApp.modalWindow == nil, "拒绝后再次申请仍弹出模态对话框")

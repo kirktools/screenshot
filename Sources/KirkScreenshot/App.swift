@@ -49,6 +49,7 @@ struct ScreenPermissionAccess {
     private var activationObserver: NSObjectProtocol?
     private var hotkeyWarnings: [String] = []
     var permissionAccess = ScreenPermissionAccess()
+    var schedulePermissionRequest: (@escaping () -> Void) -> Void = { action in DispatchQueue.main.async(execute: action) }
     private var permissionRequestPending = false
     private var hasRequestedPermission = false
     private weak var permissionButton: NSButton?
@@ -255,7 +256,7 @@ struct ScreenPermissionAccess {
         hasRequestedPermission = true; permissionRequestPending = true
         refreshSettingsStatus()
         // 先退出按钮/辅助功能的 action 调用栈，再交给系统显示原生授权。
-        DispatchQueue.main.async { [weak self] in
+        schedulePermissionRequest { [weak self] in
             guard let self else { return }
             let granted = self.permissionAccess.request()
             self.permissionRequestPending = false; self.permissionButton?.isEnabled = true
