@@ -36,6 +36,8 @@ jobs:
       # 未优化的 Intel Debug 会因处理积压丢帧，触发正常的末尾保护确认。
       - name: 构建应用（Release）
         run: scripts/build-app.sh
+      - name: ZIP 安装版资源与启动回归
+        run: python3 scripts/test-packaged-startup.py
       - name: 原生渲染与导出测试（不读取桌面）
         run: "'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' --self-test"
       - name: 连续滚动会话回归（合成帧，不读取桌面）

@@ -1,7 +1,28 @@
 import AppKit
 import Carbon
 
-func localized(_ key: String) -> String { NSLocalizedString(key, bundle: .module, comment: "") }
+// SwiftPM 的独立可执行文件查找位置与标准 .app/Contents/Resources 不同。
+// 安装版必须显式使用包内资源，不能依赖开发机或 CI 的 .build 目录。
+enum AppLocalization {
+    static let embeddedBundle: Bundle? = Bundle.main.resourceURL
+        .flatMap { Bundle(url: $0.appendingPathComponent("KirkScreenshot_KirkScreenshot.bundle")) }
+    static var bundle: Bundle {
+        if Bundle.main.bundleURL.pathExtension == "app" { return embeddedBundle ?? .main }
+        return .module
+    }
+    static func verifyPackagedResources() throws {
+        guard let bundle = embeddedBundle else { throw CaptureError.message("安装包缺少语言资源包") }
+        for (language, expected) in [("en", "Capture Region"), ("zh-Hans", "区域截图")] {
+            guard let path = bundle.paths(forResourcesOfType: "lproj", inDirectory: nil).first(where: { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent.caseInsensitiveCompare(language) == .orderedSame }),
+                  let languageBundle = Bundle(path: path),
+                  languageBundle.localizedString(forKey: "capture.normal", value: nil, table: nil) == expected else {
+                throw CaptureError.message("安装包语言资源无效：\(language)")
+            }
+        }
+        guard localized("capture.normal") != "capture.normal" else { throw CaptureError.message("菜单语言资源加载失败") }
+    }
+}
+func localized(_ key: String) -> String { NSLocalizedString(key, bundle: AppLocalization.bundle, comment: "") }
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var item: NSStatusItem!
@@ -284,6 +305,11 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: .module
     @MainActor static func main() {
         if CommandLine.arguments.contains("--permission-status") {
             print("Screen capture authorized: \(CGPreflightScreenCaptureAccess())"); return
+        }
+        if CommandLine.arguments.contains("--packaged-resources-test") {
+            do { try AppLocalization.verifyPackagedResources(); print("PACKAGED RESOURCES PASSED") }
+            catch { fputs("PACKAGED RESOURCES FAILED: \(error)\n", stderr); exit(1) }
+            return
         }
         let app = NSApplication.shared
         let delegate = AppDelegate()

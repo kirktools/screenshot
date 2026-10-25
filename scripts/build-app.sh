@@ -29,7 +29,7 @@ else
   bin_path=$(swift build "${build_flags[@]}" -c "$configuration" --show-bin-path)
   cp "$bin_path/KirkScreenshot" "$app/Contents/MacOS/KirkScreenshot"
 fi
-# SwiftPM Bundle.module 也在主 Bundle 内查找该资源包。
+# AppLocalization 显式读取标准 Contents/Resources 内的语言资源包。
 for resource in "$bin_path"/*.bundle; do
   [[ -d "$resource" ]] || continue
   cp -R "$resource" "$app/Contents/Resources/"
@@ -46,5 +46,6 @@ else
   codesign --force --deep --options runtime --timestamp --sign "$identity" "$app"
 fi
 codesign --verify --deep --strict "$app"
+"$app/Contents/MacOS/KirkScreenshot" --packaged-resources-test
 ditto -c -k --sequesterRsrc --keepParent "$app" "$PWD/dist/Kirk-Screenshot-$version-macOS.zip"
 echo "已构建：$app"
