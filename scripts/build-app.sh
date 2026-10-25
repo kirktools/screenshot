@@ -29,7 +29,7 @@ else
   bin_path=$(swift build "${build_flags[@]}" -c "$configuration" --show-bin-path)
   cp "$bin_path/KirkScreenshot" "$app/Contents/MacOS/KirkScreenshot"
 fi
-# SwiftPM Bundle.module 也在主 Bundle 内查找该资源包。
+# AppLocalization 显式读取标准 Contents/Resources 内的语言资源包。
 for resource in "$bin_path"/*.bundle; do
   [[ -d "$resource" ]] || continue
   cp -R "$resource" "$app/Contents/Resources/"
@@ -38,6 +38,26 @@ cp Resources/Info.plist "$app/Contents/Info.plist"
 cp Resources/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER:-1}" "$app/Contents/Info.plist"
+# 将源码身份写入设置窗口；本地验收可明确区分分支、提交和未提交修改。
+python3 - "$app/Contents/Info.plist" <<'PYTHON'
+import os, plistlib, subprocess, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+def git(*args):
+    return subprocess.check_output(['git', *args], text=True).strip()
+try:
+    revision = git('rev-parse', '--short=8', 'HEAD')
+    branch = os.environ.get('GITHUB_HEAD_REF') or git('branch', '--show-current') or 'detached'
+    dirty = bool(git('status', '--porcelain'))
+    label = f'{branch} @ {revision}' + (' · 有本地修改' if dirty else '')
+except subprocess.CalledProcessError:
+    label = '源码快照'
+with p.open('rb') as f:
+    data = plistlib.load(f)
+data['KirkBuildSource'] = label
+with p.open('wb') as f:
+    plistlib.dump(data, f)
+PYTHON
 # 默认 ad-hoc 签名仅保证包完整性，不是 Developer ID 签名或公证。
 identity=${SIGN_IDENTITY:--}
 if [[ "$identity" == '-' ]]; then
@@ -46,6 +66,9 @@ else
   codesign --force --deep --options runtime --timestamp --sign "$identity" "$app"
 fi
 codesign --verify --deep --strict "$app"
-ditto -c -k --sequesterRsrc --keepParent "$app" "$PWD/dist/Kirk-Screenshot-$version-macOS.zip"
-scripts/package-dmg.sh
+"$app/Contents/MacOS/KirkScreenshot" --packaged-resources-test
+if [[ "${KIRK_SKIP_PACKAGING:-0}" != 1 ]]; then
+  ditto -c -k --sequesterRsrc --keepParent "$app" "$PWD/dist/Kirk-Screenshot-$version-macOS.zip"
+  scripts/package-dmg.sh
+fi
 echo "已构建：$app"

@@ -15,7 +15,7 @@
 
 ## 怎么用
 
-1. 按 **⌘⇧2** 普通截图，或 **⌘⇧7** 截长图，拖动框选区域。
+1. 按 **⌘⇧2** 普通截图，或 **⌘⇧7** 截长图，移动鼠标预选窗口，单击确认；也可拖动框选区域。
 2. 普通截图直接标注；长截图在原应用中向下滚动，预览自动更新。
 3. **回车 / ✓ 复制并结束**，**Esc / × 取消**。长图需要编辑时点铅笔，保存时点下载图标。
 
@@ -29,14 +29,15 @@
 
 支持 **macOS 14+**，Apple Silicon / Intel。新版本提供 DMG 安装包：打开后将应用拖入 Applications。也保留 ZIP；旧版没有 DMG 时可使用 ZIP。
 
+本地验收 PR：切到对应代码后运行 `make dev`，自动更新并启动 `/Applications/Kirk Screenshot.app`，设置中可核对分支和提交。详见[本地测试](docs/USAGE.md#本地验收-pr)。
+
 从源码构建（Swift 6.0+）：
 
 ```bash
-scripts/build-app.sh
-open 'dist/Kirk Screenshot.app'
+make dev
 ```
 
-日常使用建议放到 `~/Applications`。首次截图需授予**屏幕录制**权限，不需要辅助功能或麦克风权限。
+统一安装到 `/Applications/Kirk Screenshot.app`，避免多份同名应用。首次截图需授予**屏幕录制**权限，不需要辅助功能或麦克风权限。
 
 当前应用尚未 Developer ID 签名及公证；下载包可能被 macOS 拦截，请按系统提示核验来源，勿关闭系统安全保护。详见[安装与权限](docs/USAGE.md#安装与权限)。
 

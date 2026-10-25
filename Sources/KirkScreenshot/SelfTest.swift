@@ -4,6 +4,8 @@ import StitchCore
 
 /// 不读取桌面、不申请权限：验证平台渲染、拼接方向和实际导出像素。
 @MainActor func runSelfTest() throws {
+    try runSelectionSelfTest()
+    try runPermissionFlowSelfTest()
     func require(_ condition: Bool, _ message: String) throws { if !condition { throw CaptureError.message(message) } }
     let width = 160, height = 400
     var pixels = [UInt8](repeating: 255, count: width * height * 4)
@@ -251,4 +253,38 @@ import StitchCore
         ctx.draw(image, in: CGRect(x: (frame.minX - extent.minX) * scale, y: (frame.minY - extent.minY) * scale, width: frame.width * scale, height: frame.height * scale))
     }
     try ctx.makeImage()!.png().write(to: url, options: .atomic)
+}
+
+/// 使用假的系统权限接口验证真实按钮 action；不读取屏幕、不申请实际权限。
+@MainActor func runPermissionFlowSelfTest() throws {
+    func require(_ value: Bool, _ message: String) throws {
+        if !value { throw CaptureError.message("权限流程：" + message) }
+    }
+    let delegate = AppDelegate()
+    var authorized = false, requests = 0, settingsOpens = 0
+    delegate.permissionAccess = ScreenPermissionAccess(isAuthorized: { authorized }, request: { requests += 1; return false }, openSettings: { settingsOpens += 1 })
+    delegate.openSettings()
+    let window = NSApp.windows.first { $0.title == "Kirk Screenshot · 设置" && $0.isVisible }!
+    defer { window.close() }
+    func buttons(_ view: NSView) -> [NSButton] { (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(buttons) }
+    let request = buttons(window.contentView!).first { $0.title == "检查 / 申请屏幕录制权限…" }!
+    // 原 runModal 实现在这里不会返回；新 action 必须先返回，再异步调用系统。
+    request.performClick(nil)
+    try require(requests == 0 && NSApp.modalWindow == nil && !request.isEnabled, "申请按钮同步阻塞或创建了模态窗口")
+    request.performClick(nil)
+    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    try require(requests == 1 && settingsOpens == 1 && request.isEnabled, "重复触发系统请求，或请求结束后按钮未恢复")
+    request.performClick(nil)
+    try require(requests == 1 && settingsOpens == 2 && NSApp.modalWindow == nil, "拒绝后再次申请仍弹出模态对话框")
+    delegate.capture(scrolling: false)
+    delegate.capture(scrolling: true)
+    try require(requests == 1 && settingsOpens == 2 && window.isVisible, "未授权时截图快捷键自动重复申请")
+    authorized = true
+    request.performClick(nil)
+    try require(requests == 1 && settingsOpens == 2, "已授权仍触发申请")
+    try require(buttons(window.contentView!).contains { $0.title == "打开系统录屏设置" }, "缺少直接进入系统设置的出口")
+    window.close()
+    _ = delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
+    try require(window.isVisible && NSApp.modalWindow == nil, "权限引导后不能关闭并重开设置")
+    print("权限流程：无同步模态、异步单次申请、拒绝/已授权/重复点击、截图快捷键不自动申请、关闭重开通过")
 }

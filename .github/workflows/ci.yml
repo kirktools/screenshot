@@ -30,12 +30,16 @@ jobs:
           swift --version
       - name: 发布脚本回归（临时本地仓库，不访问 GitHub）
         run: python3 scripts/test-release.py
+      - name: 本地更新脚本回归（临时假应用）
+        run: python3 scripts/test-install-dev.py
       - name: 算法测试
         run: swift test --enable-code-coverage
       # 会话回归以约 30fps 投递帧，必须使用实际分发的优化构建。
       # 未优化的 Intel Debug 会因处理积压丢帧，触发正常的末尾保护确认。
       - name: 构建应用（Release）
         run: scripts/build-app.sh
+      - name: ZIP 安装版资源与启动回归
+        run: python3 scripts/test-packaged-startup.py
       - name: DMG 挂载与包内容验证
         run: scripts/test-dmg.sh
       - name: 原生渲染与导出测试（不读取桌面）
