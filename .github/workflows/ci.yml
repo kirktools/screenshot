@@ -30,12 +30,18 @@ jobs:
           swift --version
       - name: 发布脚本回归（临时本地仓库，不访问 GitHub）
         run: python3 scripts/test-release.py
+      - name: 本地更新脚本回归（临时假应用）
+        run: python3 scripts/test-install-dev.py
       - name: 算法测试
         run: swift test --enable-code-coverage
       # 会话回归以约 30fps 投递帧，必须使用实际分发的优化构建。
       # 未优化的 Intel Debug 会因处理积压丢帧，触发正常的末尾保护确认。
       - name: 构建应用（Release）
         run: scripts/build-app.sh
+      - name: ZIP 安装版资源与启动回归
+        run: python3 scripts/test-packaged-startup.py
+      - name: DMG 挂载与包内容验证
+        run: scripts/test-dmg.sh
       - name: 原生渲染与导出测试（不读取桌面）
         run: "'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' --self-test"
       - name: 连续滚动会话回归（合成帧，不读取桌面）
@@ -43,5 +49,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: Kirk-Screenshot-${{ matrix.os }}
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*.dmg
           retention-days: 14
