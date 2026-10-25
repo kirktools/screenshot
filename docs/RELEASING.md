@@ -28,7 +28,7 @@ make release-dry-run BUMP=minor  # 计算并预览，不联网、不改文件、
 3. 生成注释标签 `vX.Y.Z`，通过一次 `git push --atomic` 推送 master 和该标签；已经提交但尚未推送的 master 改动会一起推送，不自动提交其他文件。
 4. 标签 push 触发 Release 工作流。检出标签指向的代码，校验标签与 VERSION 一致且提交属于 master；不会改为构建之后前进的 master。
 5. 算法测试通过后构建 universal 应用，验证双架构、包内渲染/PNG 与连续滚动会话，生成校验和并上传 Artifact。
-6. 全部成功后，直接创建正式 GitHub Release，附带 zip、SHA256SUMS 和自动生成的版本变更记录。
+6. 全部成功后，直接创建正式 GitHub Release，附带 dmg、zip、SHA256SUMS 和自动生成的版本变更记录。
 
 本机只需要 git、python3 以及平时 `git push` 的 SSH / HTTPS 认证，**无需安装或登录 gh**。云端使用 GitHub 自动提供的 GITHUB_TOKEN 调用 gh 创建 Release，不需要维护者额外存放个人 Token。标签触发依据 [GitHub 官方说明](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)。普通 master push 只跑 CI，不发布；不再有手动 workflow_dispatch 加版本流程，也不使用需要额外批准的 release Environment。
 
@@ -45,6 +45,12 @@ README 的功能、限制和安装说明不会由脚本自动改写；发布说�
 - 如果 Release 已存在，创建步骤会失败，不会覆盖已发布文件。
 
 当前流程会直接向 master 写版本提交；个人维护阶段可先禁止删除和强推。之后若要求所有变更必须走 PR，应把版本提交改为先审核 PR、合并后再打标签；不要为了发版关闭分支保护。每个版本单独排队，不取消正在运行的同版本发布。
+
+## DMG 安装包
+
+`scripts/build-app.sh` 同时生成 ZIP 和只读压缩 DMG。镜像内只有已签名应用和指向 `/Applications` 的安装入口，不会修改应用签名内容。已有构建可运行 `scripts/package-dmg.sh` 单独重新打包，`scripts/test-dmg.sh` 会以只读方式挂载，验证内容、安装入口、版本、签名及二进制后卸载。CI 的两种架构及 Release 均执行此验证；Artifact 和 Release 上传两种安装包，Release 校验和覆盖两者。已发布的旧版本不会自动补发 DMG。
+
+DMG 不绕过 Gatekeeper，也不代替 Developer ID 签名和公证。当前仍保持 ad-hoc 签名；未来签名/公证时应先完成应用公证和 staple，再重新生成最终 ZIP、DMG 与校验和；若公证 DMG，则提交最终镜像并对其 staple 后再生成校验和。
 
 ## 签名与公证
 

@@ -48,4 +48,5 @@ fi
 codesign --verify --deep --strict "$app"
 "$app/Contents/MacOS/KirkScreenshot" --packaged-resources-test
 ditto -c -k --sequesterRsrc --keepParent "$app" "$PWD/dist/Kirk-Screenshot-$version-macOS.zip"
+scripts/package-dmg.sh
 echo "已构建：$app"

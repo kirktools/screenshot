@@ -27,7 +27,9 @@
 
 ## 安装运行
 
-支持 **macOS 14+**，Apple Silicon / Intel。当前为早期版本，可从源码构建（Swift 6.0+）：
+支持 **macOS 14+**，Apple Silicon / Intel。新版本提供 DMG 安装包：打开后将应用拖入 Applications。也保留 ZIP；旧版没有 DMG 时可使用 ZIP。
+
+从源码构建（Swift 6.0+）：
 
 ```bash
 scripts/build-app.sh

@@ -50,7 +50,8 @@ jobs:
           lipo 'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' -verify_arch x86_64
           'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' --self-test
           'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' --scroll-session-self-test
-          shasum -a 256 dist/*.zip > dist/SHA256SUMS.txt
+          scripts/test-dmg.sh
+          shasum -a 256 dist/*.zip dist/*.dmg > dist/SHA256SUMS.txt
       - name: ZIP 安装版资源与启动回归
         run: python3 scripts/test-packaged-startup.py
       - name: 上传构建产物
@@ -59,12 +60,13 @@ jobs:
           name: release-${{ steps.version.outputs.value }}
           path: |
             dist/*.zip
+            dist/*.dmg
             dist/SHA256SUMS.txt
       - name: 正式发布 Release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.value }}
         run: |
-          gh release create "v$VERSION" dist/*.zip dist/SHA256SUMS.txt \
+          gh release create "v$VERSION" dist/*.zip dist/*.dmg dist/SHA256SUMS.txt \
             --verify-tag --title "Kirk Screenshot v$VERSION" \
             --notes-file docs/RELEASE-NOTES.md --generate-notes
