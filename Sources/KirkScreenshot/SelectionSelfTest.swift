@@ -48,5 +48,50 @@ import AppKit
     try require(regions == [CGRect(x: -300, y: 150, width: 200, height: 400), CGRect(x: 900, y: 600, width: 100, height: 100)],
                 "窗口过滤、负坐标转换、屏幕边缘裁切或前后顺序不正确：\(regions)")
     try require(WindowPreselection.regions(from: [], excludingPID: 99, screenTop: 800, desktop: desktop).isEmpty, "空窗口列表不能降级")
+    // 故意把第一响应者从框选视图移走，复现 Esc 只依赖视图时无法退出。
+    let selector = RegionSelector()
+    var cancelled = 0
+    selector.completion = { if $0 == nil { cancelled += 1 } }
+    selector.begin(candidates: [NSScreen.screens.reduce(CGRect.null) { $0.union($1.frame) }])
+    defer { selector.finish(cancel: true) }
+    guard let window = NSApp.windows.first(where: { $0 is SelectionWindow && $0.isVisible }) else {
+        throw CaptureError.message("窗口预选：测试选择器未显示")
+    }
+    window.makeFirstResponder(window)
+    let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                  windowNumber: window.windowNumber, context: nil, characters: "\u{1b}",
+                                  charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!
+    window.keyDown(with: escape)
+    try require(cancelled == 1 && !window.isVisible, "响应者移走后 Esc 失效，蓝框仍残留")
+    selector.finish(cancel: true)
+    try require(cancelled == 1, "重复结束触发多次回调")
+    let desktopRect = NSScreen.screens.reduce(CGRect.null) { $0.union($1.frame) }
+    for keyCode: UInt16 in [36, 76] {
+        var confirmed: CGRect?
+        selector.completion = { confirmed = $0 }
+        selector.begin(candidates: [desktopRect])
+        let active = NSApp.windows.first { $0 is SelectionWindow && $0.isVisible }!
+        let view = active.contentView as! SelectionView
+        try require(view.acceptsFirstMouse(for: nil), "非关键窗口首次点击被吞掉")
+        if let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            let alpha = bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)!.alphaComponent
+            try require(alpha > 0 && alpha < 0.03, "预选区域完全透明，可能让点击穿透：\(alpha)")
+        } else { throw CaptureError.message("窗口预选：无法验证选区像素") }
+        active.makeFirstResponder(active)
+        let enter = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                    windowNumber: active.windowNumber, context: nil, characters: "\r",
+                                    charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: keyCode)!
+        active.keyDown(with: enter)
+        try require(confirmed == desktopRect && !active.isVisible, "第一响应者移走后回车无法确认窗口")
+    }
+    var deactivated = 0
+    selector.completion = { if $0 == nil { deactivated += 1 } }
+    selector.begin(candidates: [desktopRect])
+    NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+    try require(deactivated == 1 && !NSApp.windows.contains { $0 is SelectionWindow && $0.isVisible }, "切走应用后残留框选窗口")
+    // 已完成的选择器不能继续吞掉用户按键。
+    try require(!selector.handleKey(escape), "选择器结束后仍拦截键盘")
+    print("窗口交互：失去第一响应者时 Esc/双回车、首击、透明区域 alpha、失活清理及重复完成通过")
     print("窗口预选：前后层级、单击、鼠标抖动、手动/反向拖选、过小选区、空候选、跨屏负坐标和元数据过滤通过")
 }
