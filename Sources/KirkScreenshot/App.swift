@@ -24,6 +24,15 @@ enum AppLocalization {
 }
 func localized(_ key: String) -> String { NSLocalizedString(key, bundle: AppLocalization.bundle, comment: "") }
 
+/// 将系统调用集中在一处，回归测试可替换为无权限副作用的实现。
+struct ScreenPermissionAccess {
+    var isAuthorized: () -> Bool = { CGPreflightScreenCaptureAccess() }
+    var request: () -> Bool = { CGRequestScreenCaptureAccess() }
+    var openSettings: () -> Void = {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") { NSWorkspace.shared.open(url) }
+    }
+}
+
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var item: NSStatusItem!
     let hotkeys = HotkeyRegistry()
@@ -39,6 +48,10 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: AppLoca
     private var lastExternalApp: NSRunningApplication?
     private var activationObserver: NSObjectProtocol?
     private var hotkeyWarnings: [String] = []
+    var permissionAccess = ScreenPermissionAccess()
+    private var permissionRequestPending = false
+    private var hasRequestedPermission = false
+    private weak var permissionButton: NSButton?
     private var permissionStatusLabel: NSTextField?
     private var hotkeyStatusLabel: NSTextField?
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -158,7 +171,7 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: AppLoca
     @objc private func scrollCapture() { capture(scrolling: true) }
     func capture(scrolling: Bool) {
         guard !busy else { return }
-        guard CGPreflightScreenCaptureAccess() else { permissionGuide(); return }
+        guard permissionAccess.isAuthorized() else { openSettings(); return }
         busy = true
         let frontmost = NSWorkspace.shared.frontmostApplication
         previousApp = frontmost?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? lastExternalApp : frontmost
@@ -233,18 +246,23 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: AppLoca
     @objc private func showEditor() { busy = true; NSApp.activate(ignoringOtherApps: true); editor?.showWindow(nil) }
     @objc private func quit() { session?.cancelCapture(); NSApp.terminate(nil) }
     @objc private func permissionGuide() {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert(); alert.messageText = "允许屏幕录制"
-        alert.informativeText = "Kirk Screenshot 需要读取你选定区域的屏幕像素，用于截图和本机拼接。不会录音、上传，也不需要辅助功能权限。\n首次点击申请后按系统提示授权；若此前拒绝，请打开系统设置。重新授权后可能需要退出再启动应用。"
-        alert.addButton(withTitle: "申请权限"); alert.addButton(withTitle: "打开系统设置"); alert.addButton(withTitle: "稍后")
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            if !CGRequestScreenCaptureAccess() { openPrivacy() }
-        case .alertSecondButtonReturn: openPrivacy()
-        default: break
+        openSettings()
+        guard !permissionRequestPending else { return }
+        guard !permissionAccess.isAuthorized() else { refreshSettingsStatus(); return }
+        // 已请求过但未生效时直接引导到系统设置，不再弹应用自己的模态窗口。
+        guard !hasRequestedPermission else { permissionAccess.openSettings(); return }
+        hasRequestedPermission = true; permissionRequestPending = true
+        permissionButton?.isEnabled = false
+        // 先退出按钮/辅助功能的 action 调用栈，再交给系统显示原生授权。
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let granted = self.permissionAccess.request()
+            self.permissionRequestPending = false; self.permissionButton?.isEnabled = true
+            self.refreshSettingsStatus()
+            if !granted { self.permissionAccess.openSettings() }
         }
     }
-    private func openPrivacy() { if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") { NSWorkspace.shared.open(url) } }
+    @objc private func openPrivacy() { permissionAccess.openSettings() }
     @objc func openSettings() {
         if let settings { refreshSettingsStatus(); NSApp.activate(ignoringOtherApps: true); settings.makeKeyAndOrderFront(nil); return }
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 610, height: 610), styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -272,7 +290,11 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: AppLoca
             }
             let row = NSStackView(views: [label, recorder]); row.spacing = 24; views.append(row)
         }
-        let permissions = NSButton(title: "检查 / 申请屏幕录制权限…", target: self, action: #selector(permissionGuide)); views.append(permissions)
+        let permissions = NSButton(title: "检查 / 申请屏幕录制权限…", target: self, action: #selector(permissionGuide))
+        permissionButton = permissions
+        let privacy = NSButton(title: "打开系统录屏设置", target: self, action: #selector(openPrivacy))
+        let permissionActions = NSStackView(views: [permissions, privacy]); permissionActions.spacing = 12
+        views.append(permissionActions)
         let status = NSTextField(wrappingLabelWithString: "")
         permissionStatusLabel = status
         status.textColor = .secondaryLabelColor; views.append(status)
@@ -280,15 +302,18 @@ func localized(_ key: String) -> String { NSLocalizedString(key, bundle: AppLoca
         hotkeyStatusLabel = hotkeyStatus; views.append(hotkeyStatus)
         let version = NSTextField(labelWithString: "版本 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版") · macOS 14+ · MIT © kirktools")
         version.textColor = .secondaryLabelColor; views.append(version)
+        let source = Bundle.main.object(forInfoDictionaryKey: "KirkBuildSource") as? String ?? "开发构建"
+        let location = NSTextField(wrappingLabelWithString: "源码：\(source)\n当前应用：\(Bundle.main.bundlePath)")
+        location.font = .systemFont(ofSize: 11); location.textColor = .secondaryLabelColor; views.append(location)
         let stack = NSStackView(views: views); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 18
         stack.translatesAutoresizingMaskIntoConstraints = false; window.contentView!.addSubview(stack)
         NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 24), help.widthAnchor.constraint(equalTo: stack.widthAnchor), status.widthAnchor.constraint(equalTo: stack.widthAnchor), hotkeyStatus.widthAnchor.constraint(equalTo: stack.widthAnchor)])
         settings = window; refreshSettingsStatus(); NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
     }
     private func refreshSettingsStatus() {
-        permissionStatusLabel?.stringValue = CGPreflightScreenCaptureAccess()
+        permissionStatusLabel?.stringValue = permissionAccess.isAuthorized()
             ? "屏幕录制权限已开启。可点击上方按钮验证截图。"
-            : "尚未获得屏幕录制权限。请授权后退出并重新打开此应用；重新打开时会显示本窗口。"
+            : "当前应用尚未获得录屏权限。请点击申请，或打开系统录屏设置。若开关已开启但仍无法截图，请核对下方安装路径；授权后退出并重新打开。"
         hotkeyStatusLabel?.stringValue = hotkeyWarnings.isEmpty
             ? "当前快捷键：区域截图 \(normal.label) · 长截图 \(scroll.label)。关闭本窗口后仍常驻菜单栏。"
             : hotkeyWarnings.joined(separator: "\n")
