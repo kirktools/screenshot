@@ -41,7 +41,9 @@ struct ScreenPermissionAccess {
     private var provider: MacCaptureProvider?
     private var editor: EditorController?
     private var settings: NSWindow?
+    private var updateController: AppUpdateController?
     private var busy = false
+    private var installingUpdate = false
     private var normal = Shortcut.normal
     private var scroll = Shortcut.scroll
     private var previousApp: NSRunningApplication?
@@ -49,6 +51,7 @@ struct ScreenPermissionAccess {
     private var activationObserver: NSObjectProtocol?
     private var hotkeyWarnings: [String] = []
     var permissionAccess = ScreenPermissionAccess()
+    var schedulePermissionRequest: (@escaping () -> Void) -> Void = { action in DispatchQueue.main.async(execute: action) }
     private var permissionRequestPending = false
     private var hasRequestedPermission = false
     private weak var permissionButton: NSButton?
@@ -104,6 +107,13 @@ struct ScreenPermissionAccess {
             catch { fputs("HOTKEY SMOKE FAILED: \(error)\n", stderr); exit(1) }
             return
         }
+        if CommandLine.arguments.contains("--update-network-self-test") {
+            Task { @MainActor in
+                do { try await runUpdateNetworkSelfTest(); NSApp.terminate(nil) }
+                catch { fputs("UPDATE NETWORK SELF-TEST FAILED: \(error)\n", stderr); exit(1) }
+            }
+            return
+        }
         if CommandLine.arguments.contains("--self-test") {
             do { try runSelfTest(); print("SELF-TEST PASSED"); NSApp.terminate(nil) }
             catch { fputs("SELF-TEST FAILED: \(error)\n", stderr); exit(1) }
@@ -148,7 +158,7 @@ struct ScreenPermissionAccess {
         add(menu, "\(localized("capture.normal"))   \(normal.label)", #selector(normalCapture))
         add(menu, "\(localized("capture.scroll"))   \(scroll.label)", #selector(scrollCapture))
         if editor != nil { add(menu, "打开上次预览", #selector(showEditor)) }
-        menu.addItem(.separator()); add(menu, localized("settings"), #selector(openSettings))
+        menu.addItem(.separator()); add(menu, "检查更新…", #selector(checkForUpdates)); add(menu, localized("settings"), #selector(openSettings))
         add(menu, localized("quit"), #selector(quit)); item.menu = menu
     }
     private func add(_ menu: NSMenu, _ title: String, _ action: Selector) { let i = NSMenuItem(title: title, action: action, keyEquivalent: ""); i.target = self; menu.addItem(i) }
@@ -170,7 +180,7 @@ struct ScreenPermissionAccess {
     @objc private func normalCapture() { capture(scrolling: false) }
     @objc private func scrollCapture() { capture(scrolling: true) }
     func capture(scrolling: Bool) {
-        guard !busy else { return }
+        guard !busy && !installingUpdate else { return }
         guard permissionAccess.isAuthorized() else { openSettings(); return }
         busy = true
         let frontmost = NSWorkspace.shared.frontmostApplication
@@ -244,7 +254,7 @@ struct ScreenPermissionAccess {
         }
         showEditor(); refreshMenu()
     }
-    @objc private func showEditor() { busy = true; NSApp.activate(ignoringOtherApps: true); editor?.showWindow(nil) }
+    @objc private func showEditor() { guard !installingUpdate else { return }; busy = true; NSApp.activate(ignoringOtherApps: true); editor?.showWindow(nil) }
     @objc private func quit() { session?.cancelCapture(); NSApp.terminate(nil) }
     @objc private func permissionGuide() {
         openSettings()
@@ -255,7 +265,7 @@ struct ScreenPermissionAccess {
         hasRequestedPermission = true; permissionRequestPending = true
         refreshSettingsStatus()
         // 先退出按钮/辅助功能的 action 调用栈，再交给系统显示原生授权。
-        DispatchQueue.main.async { [weak self] in
+        schedulePermissionRequest { [weak self] in
             guard let self else { return }
             let granted = self.permissionAccess.request()
             self.permissionRequestPending = false; self.permissionButton?.isEnabled = true
@@ -264,6 +274,17 @@ struct ScreenPermissionAccess {
                 self.permissionStatusLabel?.stringValue = "系统已接受授权，请退出并重新打开当前路径的应用。"
             }
         }
+    }
+    func reserveUpdateInstallation() -> Bool {
+        guard !busy, !installingUpdate else { return false }
+        installingUpdate = true; return true
+    }
+    func releaseUpdateInstallation() { installingUpdate = false }
+    @objc private func checkForUpdates() {
+        if updateController == nil { updateController = AppUpdateController(canInstall: { [weak self] in self?.busy == false && self?.installingUpdate == false }, beginInstall: { [weak self] in
+            self?.reserveUpdateInstallation() ?? false
+        }, endInstall: { [weak self] in self?.releaseUpdateInstallation() }) }
+        updateController?.show()
     }
     @objc private func openPrivacy() { permissionAccess.openSettings() }
     @objc func openSettings() {
@@ -304,7 +325,9 @@ struct ScreenPermissionAccess {
         let hotkeyStatus = NSTextField(wrappingLabelWithString: "")
         hotkeyStatusLabel = hotkeyStatus; views.append(hotkeyStatus)
         let version = NSTextField(labelWithString: "版本 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版") · macOS 14+ · MIT © kirktools")
-        version.textColor = .secondaryLabelColor; views.append(version)
+        version.textColor = .secondaryLabelColor
+        let updates = NSButton(title: "检查更新…", target: self, action: #selector(checkForUpdates))
+        let versionActions = NSStackView(views: [version, updates]); versionActions.spacing = 12; views.append(versionActions)
         let source = Bundle.main.object(forInfoDictionaryKey: "KirkBuildSource") as? String ?? "开发构建"
         let location = NSTextField(wrappingLabelWithString: "源码：\(source)\n当前应用：\(Bundle.main.bundlePath)")
         location.font = .systemFont(ofSize: 11); location.textColor = .secondaryLabelColor; views.append(location)
@@ -340,6 +363,10 @@ struct ScreenPermissionAccess {
 
 @main struct KirkScreenshotMain {
     @MainActor static func main() {
+        if let index = CommandLine.arguments.firstIndex(of: "--apply-update") {
+            guard CommandLine.arguments.count == index + 2 else { exit(1) }
+            exit(UpdateInstaller.runHelper(manifest: CommandLine.arguments[index + 1]))
+        }
         if CommandLine.arguments.contains("--permission-status") {
             print("Screen capture authorized: \(CGPreflightScreenCaptureAccess())"); return
         }
