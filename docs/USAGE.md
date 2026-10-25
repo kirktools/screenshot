@@ -11,17 +11,42 @@
 ```bash
 xcode-select --install # 尚未安装开发工具时
 scripts/test-core.sh  # 不依赖 XCTest，可用于只有 Command Line Tools 的环境
-scripts/build-app.sh
-open 'dist/Kirk Screenshot.app'
+make dev            # 更新并启动固定安装路径的测试版
 ```
 
-产物：`dist/Kirk Screenshot.app` 和 `dist/Kirk-Screenshot-0.1.0-macOS.zip`。默认本机构建架构；`UNIVERSAL=1 scripts/build-app.sh` 构建 arm64/x86_64 双架构，`CONFIGURATION=debug` 可改为调试构建。用 Xcode 打开 `Package.swift` 也可浏览调试，但日常运行建议使用固定位置的 `.app`，以稳定权限身份。
+单独运行 `scripts/build-app.sh` 可生成 `dist/Kirk Screenshot.app` 及与 `VERSION` 对应的 ZIP/DMG 安装包。默认本机构建架构；`UNIVERSAL=1 scripts/build-app.sh` 构建 arm64/x86_64 双架构，`CONFIGURATION=debug` 可改为调试构建。用 Xcode 打开 `Package.swift` 也可浏览调试，但日常运行建议使用固定位置的 `.app`，以稳定权限身份。
 
 受限执行环境若无法写默认 Swift/Clang 缓存，可把 `CLANG_MODULE_CACHE_PATH` 与 `SWIFTPM_MODULECACHE_OVERRIDE` 指向工作区 `.build/cache/clang`，并为 SwiftPM 指定 `--cache-path`。不应为应用运行关闭系统保护。
 
+## 本地验收 PR
+
+切换代码后只需运行：
+
+```sh
+make dev
+```
+
+命令构建当前代码（包括未提交修改），校验签名完整性和语言资源，然后退出旧截图进程、备份并更新固定的 `/Applications/Kirk Screenshot.app`，最后启动。只构建本机架构，跳过 ZIP/DMG 打包；不切换分支、不推送、不发版本。需要 Swift 6+、Xcode Command Line Tools 和 Python 3。
+
+例如单独验收 PR #6，无需创建或占用已有分支：
+
+```sh
+git fetch origin pull/6/head
+git switch --detach FETCH_HEAD
+make dev
+```
+
+这是临时检出该 PR 提交用于测试。切换前请提交或暂存自己的修改；测试结束可 `git switch master` 返回。无需为测试注册 `gh` 账号，使用仓库现有 Git 访问方式即可。
+
+应用设置底部会显示源码分支/提交、是否有本地修改，以及实际安装路径。请从此固定安装路径启动，避免同时运行 `dist`、下载目录或 `~/Applications` 的副本；先完成或取消当前截图再更新，卡住的截图进程会被结束。
+
+旧应用保存在当前仓库 `.build/dev-backups/` 的 ZIP 中，更新失败会恢复原目录。恢复某份旧版时先退出截图应用，再解压该 ZIP 并放回 `/Applications`。脚本本身的更新、校验失败和回滚可用 `make dev-test` 验证，测试仅使用临时假应用。
+
+`make dev` 不修改 Gatekeeper、录屏开关或其他隐私权限，也不会自动使用 sudo。本机源码构建不经过浏览器下载隔离流程，但 ad-hoc 签名变化仍可能使已有录屏授权失效；这时只为固定路径这份应用授权并重新启动。不能保证每次构建都免重新授权。
+
 ## 安装与权限
 
-建议把应用复制到 `~/Applications` 或 `/Applications` 后首次启动。当前构建仅 **ad-hoc 签名**，不是 Developer ID 签名，也没有 Apple 公证。网络下载的包可能被 Gatekeeper 拦截；确认来源后可按 macOS 提示在“系统设置 → 隐私与安全性”中使用“仍要打开”（若系统允许）。不要关闭 Gatekeeper、SIP 或全局放宽安全策略；本地从源码构建是另一条路径。
+建议把应用安装到 `/Applications` 后首次启动，并保持唯一的日常安装副本。当前构建仅 **ad-hoc 签名**，不是 Developer ID 签名，也没有 Apple 公证。网络下载的包可能被 Gatekeeper 拦截；确认来源后可按 macOS 提示在“系统设置 → 隐私与安全性”中使用“仍要打开”（若系统允许）。不要关闭 Gatekeeper、SIP 或全局放宽安全策略；本地从源码构建是另一条路径。
 
 第一次启动显示设置；截图前申请“屏幕与系统音频录制 / 屏幕录制”（不同系统名称稍异）。只读屏幕像素，不申请麦克风、辅助功能或输入监控权限。全局快捷键采用 Carbon 热键注册，滚动由你在原应用内完成。
 

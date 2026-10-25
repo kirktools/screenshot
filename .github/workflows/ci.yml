@@ -30,6 +30,8 @@ jobs:
           swift --version
       - name: 发布脚本回归（临时本地仓库，不访问 GitHub）
         run: python3 scripts/test-release.py
+      - name: 本地更新脚本回归（临时假应用）
+        run: python3 scripts/test-install-dev.py
       - name: 算法测试
         run: swift test --enable-code-coverage
       # 会话回归以约 30fps 投递帧，必须使用实际分发的优化构建。
