@@ -37,6 +37,30 @@ import StitchCore
     let screen = NSScreen.main!.visibleFrame
     let sourceRect = CGRect(x: screen.minX + 100, y: screen.minY + 100, width: 80, height: 200)
     let source = FrozenCapture(tiles: [FrozenCaptureTile(region: sourceRect, image: image)])
+    let cursorCases: [(CaptureEdges, CaptureResizeCursor)] = [
+        ([.left, .top], .northWestSouthEast), ([.right, .bottom], .northWestSouthEast),
+        ([.left, .bottom], .northEastSouthWest), ([.right, .top], .northEastSouthWest)]
+    for (edges, expected) in cursorCases {
+        try require(CaptureResizeGeometry.cursor(for: edges) == expected, "四角斜向调整方向不正确")
+    }
+    var preselected = RegionSelectionState(candidates: [sourceRect])
+    preselected.mouseDown(at: CGPoint(x: sourceRect.midX, y: sourceRect.midY))
+    let windowRegion = preselected.mouseUp(at: CGPoint(x: sourceRect.midX, y: sourceRect.midY))!
+    let windowEditor = EditorController(image: source.crop(windowRegion)!, region: windowRegion, allowScroll: true, frozenCapture: source)
+    windowEditor.showWindow(nil)
+    try require(windowEditor.diagnosticResizeHandles.enabled, "默认窗口预选进入编辑后不能改选区")
+    let windowGrip = windowEditor.diagnosticResizeHandles
+    let corner = CGPoint(x: windowRegion.maxX - 2, y: windowRegion.maxY - 2)
+    windowGrip.began?([.right, .top], corner)
+    windowGrip.moved?(CGPoint(x: corner.x - 10, y: corner.y - 10)); windowGrip.ended?()
+    try require(windowEditor.captureRegion == CGRect(x: windowRegion.minX, y: windowRegion.minY, width: windowRegion.width - 10, height: windowRegion.height - 10), "默认窗口预选角点拖动未生效")
+    windowEditor.close()
+    let outline = ResizeHandles(frame: CGRect(x: 0, y: 0, width: 100, height: 80))
+    outline.enabled = false
+    let bitmap = outline.bitmapImageRepForCachingDisplay(in: outline.bounds)!
+    outline.cacheDisplay(in: outline.bounds, to: bitmap)
+    try require(bitmap.colorAt(x: 2, y: bitmap.pixelsHigh / 2)!.alphaComponent > 0 && outline.hitTest(CGPoint(x: 2, y: 40)) == nil,
+                "只读/长图状态没有常驻描边，或边界抢走滚轮")
     let initial = sourceRect.insetBy(dx: 20, dy: 40)
     let controller = EditorController(image: source.crop(initial)!, region: initial, allowScroll: true, frozenCapture: source)
     defer { controller.close() }

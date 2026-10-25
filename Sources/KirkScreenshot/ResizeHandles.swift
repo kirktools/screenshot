@@ -8,7 +8,14 @@ struct CaptureEdges: OptionSet {
     static let top = CaptureEdges(rawValue: 8)
 }
 
+enum CaptureResizeCursor { case horizontal, vertical, northWestSouthEast, northEastSouthWest }
+
 enum CaptureResizeGeometry {
+    static func cursor(for edges: CaptureEdges) -> CaptureResizeCursor {
+        if edges == [.left, .top] || edges == [.right, .bottom] { return .northWestSouthEast }
+        if edges == [.left, .bottom] || edges == [.right, .top] { return .northEastSouthWest }
+        return edges.contains(.left) || edges.contains(.right) ? .horizontal : .vertical
+    }
     static func edges(at point: CGPoint, in bounds: CGRect, tolerance: CGFloat = 7) -> CaptureEdges {
         guard bounds.contains(point) else { return [] }
         var edges: CaptureEdges = []
@@ -40,12 +47,42 @@ final class ResizeHandles: NSView {
         let local = convert(point, from: superview)
         return enabled && !CaptureResizeGeometry.edges(at: local, in: bounds).isEmpty ? self : nil
     }
+    private static func diagonal(rising: Bool) -> NSCursor {
+        let image = NSImage(size: NSSize(width: 24, height: 24), flipped: false) { _ in
+            let start = CGPoint(x: 5, y: rising ? 5 : 19), end = CGPoint(x: 19, y: rising ? 19 : 5)
+            let ux: CGFloat = 1 / sqrt(2), uy: CGFloat = rising ? ux : -ux
+            let path = NSBezierPath(); path.move(to: start); path.line(to: end)
+            for (point, direction) in [(start, CGFloat(1)), (end, CGFloat(-1))] {
+                path.move(to: CGPoint(x: point.x + direction * ux * 5 - uy * 4, y: point.y + direction * uy * 5 + ux * 4))
+                path.line(to: point)
+                path.line(to: CGPoint(x: point.x + direction * ux * 5 + uy * 4, y: point.y + direction * uy * 5 - ux * 4))
+            }
+            path.lineCapStyle = .round; path.lineJoinStyle = .round
+            NSColor.black.setStroke(); path.lineWidth = 4; path.stroke()
+            NSColor.white.setStroke(); path.lineWidth = 2; path.stroke()
+            return true
+        }
+        return NSCursor(image: image, hotSpot: NSPoint(x: 12, y: 12))
+    }
+    private static let northwest = diagonal(rising: false)
+    private static let northeast = diagonal(rising: true)
     override func resetCursorRects() {
         guard enabled else { return }
-        addCursorRect(CGRect(x: 0, y: 0, width: 7, height: bounds.height), cursor: .resizeLeftRight)
-        addCursorRect(CGRect(x: max(0, bounds.width - 7), y: 0, width: 7, height: bounds.height), cursor: .resizeLeftRight)
-        addCursorRect(CGRect(x: 0, y: 0, width: bounds.width, height: 7), cursor: .resizeUpDown)
-        addCursorRect(CGRect(x: 0, y: max(0, bounds.height - 7), width: bounds.width, height: 7), cursor: .resizeUpDown)
+        let t = min(CGFloat(7), min(bounds.width, bounds.height) / 2)
+        for x in [CGFloat(0), bounds.width - t] {
+            addCursorRect(CGRect(x: x, y: t, width: t, height: max(0, bounds.height - 2 * t)), cursor: .resizeLeftRight)
+        }
+        for y in [CGFloat(0), bounds.height - t] {
+            addCursorRect(CGRect(x: t, y: y, width: max(0, bounds.width - 2 * t), height: t), cursor: .resizeUpDown)
+        }
+        for x in [CGFloat(0), bounds.width - t] {
+            for y in [CGFloat(0), bounds.height - t] {
+                let rect = CGRect(x: x, y: y, width: t, height: t)
+                let edges = CaptureResizeGeometry.edges(at: CGPoint(x: rect.midX, y: rect.midY), in: bounds)
+                let cursor = CaptureResizeGeometry.cursor(for: edges) == .northWestSouthEast ? Self.northwest : Self.northeast
+                addCursorRect(rect, cursor: cursor)
+            }
+        }
     }
     override func mouseDown(with event: NSEvent) {
         guard let window else { return }
@@ -58,6 +95,7 @@ final class ResizeHandles: NSView {
     }
     override func mouseUp(with event: NSEvent) { mouseDragged(with: event); ended?() }
     override func draw(_ dirtyRect: NSRect) {
+        CaptureOutline.draw(bounds.insetBy(dx: 2, dy: 2))
         guard enabled else { return }
         for x in [CGFloat(4), bounds.midX, bounds.maxX - 4] {
             for y in [CGFloat(4), bounds.midY, bounds.maxY - 4] {

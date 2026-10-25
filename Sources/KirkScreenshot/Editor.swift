@@ -292,7 +292,7 @@ extension NSAffineTransform {
         scrollView.verticalScrollElasticity = .none; scrollView.horizontalScrollElasticity = .none
         scrollView.automaticallyAdjustsContentInsets = false; scrollView.contentInsets = .init()
         scrollView.autohidesScrollers = true; scrollView.scrollerStyle = .overlay; scrollView.borderType = .noBorder
-        scrollView.wantsLayer = true; scrollView.layer?.borderWidth = 2; scrollView.layer?.borderColor = NSColor.systemTeal.cgColor
+        scrollView.wantsLayer = true
         scrollView.drawsBackground = true; scrollView.backgroundColor = .windowBackgroundColor
         scrollView.documentView = canvas
         let container = NSView(frame: CGRect(origin: .zero, size: initial.size))

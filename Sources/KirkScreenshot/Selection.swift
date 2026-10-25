@@ -173,7 +173,7 @@ final class SelectionView: NSView {
             // 完全透明的孔洞可能让 WindowServer 把点击交给下层窗口。
             // 极低 alpha 保持选区可命中；截图采集仍排除本应用的覆盖窗口。
             NSColor.black.withAlphaComponent(0.01).setFill(); rect.fill(using: .copy)
-            NSColor.systemTeal.setStroke(); let path = NSBezierPath(rect: rect); path.lineWidth = 2; path.stroke()
+            CaptureOutline.draw(rect.insetBy(dx: 2, dy: 2))
         }
         let help = "单击选择高亮窗口 · 拖动自选区域 · Esc 取消 · 长图请避开固定栏"
         (help as NSString).draw(at: CGPoint(x: 28, y: bounds.height - 70), withAttributes: [.font: NSFont.systemFont(ofSize: 17, weight: .medium), .foregroundColor: NSColor.white])
