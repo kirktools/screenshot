@@ -13,12 +13,17 @@ enum CaptureLayout {
     }
 }
 
-final class CaptureBorderView: NSView {
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.systemTeal.setStroke()
-        let line = NSBezierPath(rect: bounds.insetBy(dx: 2, dy: 2))
-        line.lineWidth = 2; line.stroke()
+/// 统一框选、滚动捕获与编辑边界，深浅背景上均保留描边。
+enum CaptureOutline {
+    static func draw(_ rect: CGRect) {
+        guard rect.width > 0 && rect.height > 0 else { return }
+        let path = NSBezierPath(rect: rect)
+        NSColor.black.withAlphaComponent(0.85).setStroke(); path.lineWidth = 4; path.stroke()
+        NSColor.systemTeal.setStroke(); path.lineWidth = 2; path.stroke()
     }
+}
+final class CaptureBorderView: NSView {
+    override func draw(_ dirtyRect: NSRect) { CaptureOutline.draw(bounds.insetBy(dx: 4, dy: 4)) }
 }
 
 /// 边框本身完全不接收鼠标与滚轮。整个本应用由 ScreenCaptureKit 排除。
@@ -42,7 +47,15 @@ final class EditorCaptureWindow: NSWindow {
 
 final class EditorBackdrop: NSView {
     var cancel: (() -> Void)?
-    override func draw(_ dirtyRect: NSRect) { NSColor.black.withAlphaComponent(0.32).setFill(); bounds.fill() }
+    var frozenCapture: FrozenCapture?
+    override func draw(_ dirtyRect: NSRect) {
+        if let screenFrame = window?.frame {
+            for tile in frozenCapture?.tiles ?? [] {
+                tile.image.nsImage.draw(in: tile.region.offsetBy(dx: -screenFrame.minX, dy: -screenFrame.minY))
+            }
+        }
+        NSColor.black.withAlphaComponent(0.32).setFill(); bounds.fill()
+    }
     override func mouseDown(with event: NSEvent) { NSSound.beep() }
 }
 

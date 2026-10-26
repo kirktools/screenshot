@@ -49,6 +49,7 @@ struct ScreenPermissionAccess {
     private var activationObserver: NSObjectProtocol?
     private var hotkeyWarnings: [String] = []
     var permissionAccess = ScreenPermissionAccess()
+    var schedulePermissionRequest: (@escaping () -> Void) -> Void = { action in DispatchQueue.main.async(execute: action) }
     private var permissionRequestPending = false
     private var hasRequestedPermission = false
     private weak var permissionButton: NSButton?
@@ -194,8 +195,9 @@ struct ScreenPermissionAccess {
                         guard rect.height >= 100, rect.width >= 80 else { throw CaptureError.message("长截图区域至少需要 80 × 100 点，请框选正文内容。") }
                         try self.beginScroll(rect, provider: provider)
                     } else {
-                        let image = try await provider.capture(rect)
-                        self.busy = false; self.provider = nil; self.present(image, region: rect, allowScroll: true)
+                        let frozen = try await provider.frozenCapture(containing: rect)
+                        guard let image = frozen.crop(rect) else { throw CaptureError.message("无法从屏幕快照裁取选区") }
+                        self.busy = false; self.provider = nil; self.present(image, region: rect, allowScroll: true, frozenCapture: frozen)
                     }
                 } catch { self.busy = false; self.provider = nil; showError(CaptureError.message("\(error.localizedDescription)\n若刚授予屏幕录制权限，请退出应用后重新打开。")) }
             }
@@ -221,13 +223,13 @@ struct ScreenPermissionAccess {
         }
         guard session.start() else { self.session = nil; throw CaptureError.message("无法注册回车/Esc 会话快捷键") }
     }
-    private func present(_ image: CGImage, region: CGRect? = nil, allowScroll: Bool = false) {
+    private func present(_ image: CGImage, region: CGRect? = nil, allowScroll: Bool = false, frozenCapture: FrozenCapture? = nil) {
         editor?.close()
-        let controller = EditorController(image: image, region: region, allowScroll: allowScroll)
+        let controller = EditorController(image: image, region: region, allowScroll: allowScroll, frozenCapture: frozenCapture)
         editor = controller
         controller.dismissed = { [weak self] in self?.busy = false }
-        controller.requestScroll = { [weak self] in
-            guard let self, let region else { return }
+        controller.requestScroll = { [weak self, weak controller] in
+            guard let self, let region = controller?.captureRegion ?? region else { return }
             guard region.width >= 80, region.height >= 100, NSScreen.screens.contains(where: { $0.frame.contains(region) }) else {
                 self.busy = false; showError(CaptureError.message("长截图需在单一显示器内框选至少 80 × 100 点的正文区域。")); return
             }
@@ -249,17 +251,19 @@ struct ScreenPermissionAccess {
         openSettings()
         guard !permissionRequestPending else { return }
         guard !permissionAccess.isAuthorized() else { refreshSettingsStatus(); return }
-        // 已请求过但未生效时直接引导到系统设置，不再弹应用自己的模态窗口。
-        guard !hasRequestedPermission else { permissionAccess.openSettings(); return }
+        // 两个按钮职责分开：重复点击主按钮仅重新检查，系统设置只由独立按钮打开。
+        guard !hasRequestedPermission else { refreshSettingsStatus(); return }
         hasRequestedPermission = true; permissionRequestPending = true
-        permissionButton?.isEnabled = false
+        refreshSettingsStatus()
         // 先退出按钮/辅助功能的 action 调用栈，再交给系统显示原生授权。
-        DispatchQueue.main.async { [weak self] in
+        schedulePermissionRequest { [weak self] in
             guard let self else { return }
             let granted = self.permissionAccess.request()
             self.permissionRequestPending = false; self.permissionButton?.isEnabled = true
             self.refreshSettingsStatus()
-            if !granted { self.permissionAccess.openSettings() }
+            if granted && !self.permissionAccess.isAuthorized() {
+                self.permissionStatusLabel?.stringValue = "系统已接受授权，请退出并重新打开当前路径的应用。"
+            }
         }
     }
     @objc private func openPrivacy() { permissionAccess.openSettings() }
@@ -311,9 +315,18 @@ struct ScreenPermissionAccess {
         settings = window; refreshSettingsStatus(); NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
     }
     private func refreshSettingsStatus() {
-        permissionStatusLabel?.stringValue = permissionAccess.isAuthorized()
-            ? "屏幕录制权限已开启。可点击上方按钮验证截图。"
-            : "当前应用尚未获得录屏权限。请点击申请，或打开系统录屏设置。若开关已开启但仍无法截图，请核对下方安装路径；授权后退出并重新打开。"
+        let authorized = permissionAccess.isAuthorized()
+        permissionButton?.isEnabled = !permissionRequestPending && !authorized
+        permissionButton?.title = permissionRequestPending ? "正在申请…" : (authorized ? "录屏权限已开启" : (hasRequestedPermission ? "重新检查权限" : "申请录屏权限"))
+        if permissionRequestPending {
+            permissionStatusLabel?.stringValue = "正在等待系统授权。只会发起一次请求，请处理 macOS 的提示。"
+        } else if authorized {
+            permissionStatusLabel?.stringValue = "屏幕录制权限已开启。可点击上方按钮验证截图。"
+        } else if hasRequestedPermission {
+            permissionStatusLabel?.stringValue = "系统尚未授予当前应用录屏权限。可点击右侧‘打开系统录屏设置’处理；此按钮只重新检查，不会打开系统设置。授权后退出并重新打开。"
+        } else {
+            permissionStatusLabel?.stringValue = "点击‘申请录屏权限’向系统发起一次授权请求；‘打开系统录屏设置’仅打开设置页面。若开关已开启仍不可用，请核对下方安装路径。"
+        }
         hotkeyStatusLabel?.stringValue = hotkeyWarnings.isEmpty
             ? "当前快捷键：区域截图 \(normal.label) · 长截图 \(scroll.label)。关闭本窗口后仍常驻菜单栏。"
             : hotkeyWarnings.joined(separator: "\n")

@@ -19,6 +19,7 @@ import StitchCore
     let data = Data(pixels) as CFData
     let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
                         space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue), provider: CGDataProvider(data: data)!, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+    try runCaptureResizeSelfTest(image: image)
     let a = image.cropping(to: CGRect(x: 0, y: 0, width: width, height: 260))!
     let b = image.cropping(to: CGRect(x: 0, y: 100, width: width, height: 260))!
     let match = StitchMatcher().match(previous: a.grayFrame(), next: b.grayFrame())
@@ -262,27 +263,33 @@ import StitchCore
     }
     let delegate = AppDelegate()
     var authorized = false, requests = 0, settingsOpens = 0
+    var scheduled: [() -> Void] = []
+    delegate.schedulePermissionRequest = { scheduled.append($0) }
     delegate.permissionAccess = ScreenPermissionAccess(isAuthorized: { authorized }, request: { requests += 1; return false }, openSettings: { settingsOpens += 1 })
     delegate.openSettings()
     let window = NSApp.windows.first { $0.title == "Kirk Screenshot · 设置" && $0.isVisible }!
     defer { window.close() }
     func buttons(_ view: NSView) -> [NSButton] { (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(buttons) }
-    let request = buttons(window.contentView!).first { $0.title == "检查 / 申请屏幕录制权限…" }!
+    let request = buttons(window.contentView!).first { $0.title == "申请录屏权限" }!
     // 原 runModal 实现在这里不会返回；新 action 必须先返回，再异步调用系统。
-    request.performClick(nil)
+    NSApp.sendAction(request.action!, to: request.target, from: request)
     try require(requests == 0 && NSApp.modalWindow == nil && !request.isEnabled, "申请按钮同步阻塞或创建了模态窗口")
+    NSApp.sendAction(request.action!, to: request.target, from: request)
+    try require(scheduled.count == 1, "重复点击创建了多个授权任务")
+    scheduled.removeFirst()()
+    try require(requests == 1 && settingsOpens == 0 && request.isEnabled && request.title == "重新检查权限", "重复触发系统请求，或请求结束后按钮未恢复")
     request.performClick(nil)
-    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-    try require(requests == 1 && settingsOpens == 1 && request.isEnabled, "重复触发系统请求，或请求结束后按钮未恢复")
-    request.performClick(nil)
-    try require(requests == 1 && settingsOpens == 2 && NSApp.modalWindow == nil, "拒绝后再次申请仍弹出模态对话框")
+    try require(requests == 1 && settingsOpens == 0 && NSApp.modalWindow == nil, "拒绝后再次申请仍弹出模态对话框")
     delegate.capture(scrolling: false)
     delegate.capture(scrolling: true)
-    try require(requests == 1 && settingsOpens == 2 && window.isVisible, "未授权时截图快捷键自动重复申请")
+    try require(requests == 1 && settingsOpens == 0 && window.isVisible, "未授权时截图快捷键自动重复申请")
     authorized = true
     request.performClick(nil)
-    try require(requests == 1 && settingsOpens == 2, "已授权仍触发申请")
+    try require(requests == 1 && settingsOpens == 0, "已授权仍触发申请")
     try require(buttons(window.contentView!).contains { $0.title == "打开系统录屏设置" }, "缺少直接进入系统设置的出口")
+    let privacy = buttons(window.contentView!).first { $0.title == "打开系统录屏设置" }!
+    privacy.performClick(nil)
+    try require(settingsOpens == 1 && requests == 1, "打开设置按钮错误地申请权限")
     window.close()
     _ = delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
     try require(window.isVisible && NSApp.modalWindow == nil, "权限引导后不能关闭并重开设置")

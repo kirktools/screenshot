@@ -53,6 +53,7 @@ struct Annotation {
 struct EditState {
     var image: CGImage
     var annotations: [Annotation] = []
+    var captureRegion: CGRect?
 }
 
 /// 预览和导出共用此函数；所有几何数据均使用图片像素、左上原点。
@@ -107,6 +108,7 @@ struct EditState {
     var cancelRequested: (() -> Void)?
     var changed: (() -> Void)?
     var feedback: ((String) -> Void)?
+    var cropRequested: ((CGRect) -> Bool)?
     private var history: [EditState] = []
     private var future: [EditState] = []
     private var drag: Annotation?
@@ -175,6 +177,7 @@ struct EditState {
     }
     func apply(_ final: Annotation) {
         if final.tool == .crop {
+            if let cropRequested { if !cropRequested(final.rect.integral) { update() }; return }
             if final.rect.width >= 8, final.rect.height >= 8, let flattened = render(state), let cropped = flattened.cropping(to: final.rect.integral) {
                 checkpoint(); state = EditState(image: cropped); layoutImage()
             }
@@ -183,7 +186,26 @@ struct EditState {
         }
         update()
     }
-    private func checkpoint() { history.append(state); if history.count > 30 { history.removeFirst() }; future.removeAll() }
+    func reframe(image: CGImage, region: CGRect, scale: CGFloat, remember: Bool) {
+        guard let previous = state.captureRegion else { return }
+        if remember { checkpoint() }
+        let delta = CGPoint(x: (previous.minX - region.minX) * scale, y: (region.maxY - previous.maxY) * scale)
+        state.annotations = state.annotations.map { annotation in
+            return Annotation(tool: annotation.tool, start: CGPoint(x: annotation.start.x + delta.x, y: annotation.start.y + delta.y),
+                                 end: CGPoint(x: annotation.end.x + delta.x, y: annotation.end.y + delta.y), text: annotation.text,
+                                 color: annotation.color, lineWidth: annotation.lineWidth)
+        }
+        state.image = image; state.captureRegion = region; update()
+    }
+    func releaseCaptureHistory() {
+        if let compact = copiedStrip(state.image, rows: state.image.height) { state.image = compact }
+        history.removeAll(); future.removeAll(); state.captureRegion = nil
+    }
+    private func checkpoint() {
+        history.append(state)
+        while history.count > 30 || (history.count > 1 && history.reduce(0, { $0 + $1.image.bytesPerRow * $1.image.height }) > 256_000_000) { history.removeFirst() }
+        future.removeAll()
+    }
     private func update() { needsDisplay = true; changed?() }
     @objc func undo(_ sender: Any?) { guard let previous = history.popLast() else { return }; future.append(state); state = previous; layoutImage(); update() }
     @objc func redo(_ sender: Any?) { guard let next = future.popLast() else { return }; history.append(state); state = next; layoutImage(); update() }
@@ -220,7 +242,15 @@ extension NSAffineTransform {
     private let info = NSTextField(labelWithString: "")
     private let toolbar: NSPanel
     private var backdrops: [NSWindow] = []
-    private let anchor: CGRect
+    private var anchor: CGRect
+    private var frozenCapture: FrozenCapture?
+    private var displayObserver: NSObjectProtocol?
+    private var displayLayoutChanged = false
+    private let resizeHandles = ResizeHandles()
+    private var resizeGesture: (region: CGRect, start: CGPoint, edges: CaptureEdges, checkpointed: Bool)?
+    var captureRegion: CGRect? { canvas.state.captureRegion ?? window?.frame }
+    var diagnosticResizeHandles: ResizeHandles { resizeHandles }
+    var diagnosticFrozenCaptureRetained: Bool { frozenCapture != nil }
     private let visibleFrame: CGRect
     private let scrollView = CaptureScrollView()
     private let isLongImage: Bool
@@ -234,8 +264,10 @@ extension NSAffineTransform {
     }
     var requestScroll: (() -> Void)?
     var dismissed: (() -> Void)?
-    init(image: CGImage, region: CGRect? = nil, allowScroll: Bool = false) {
+    init(image: CGImage, region: CGRect? = nil, allowScroll: Bool = false, frozenCapture: FrozenCapture? = nil) {
         canvas = EditorCanvas(image: image)
+        self.frozenCapture = frozenCapture
+        if frozenCapture != nil { canvas.state.captureRegion = region }
         let screen = NSScreen.screens.first(where: { $0.frame.intersects(region ?? .zero) }) ?? NSScreen.main!
         visibleFrame = screen.visibleFrame
         let width = min(CGFloat(image.width), min(860, visibleFrame.width - 48))
@@ -260,9 +292,29 @@ extension NSAffineTransform {
         scrollView.verticalScrollElasticity = .none; scrollView.horizontalScrollElasticity = .none
         scrollView.automaticallyAdjustsContentInsets = false; scrollView.contentInsets = .init()
         scrollView.autohidesScrollers = true; scrollView.scrollerStyle = .overlay; scrollView.borderType = .noBorder
-        scrollView.wantsLayer = true; scrollView.layer?.borderWidth = 2; scrollView.layer?.borderColor = NSColor.systemTeal.cgColor
+        scrollView.wantsLayer = true
         scrollView.drawsBackground = true; scrollView.backgroundColor = .windowBackgroundColor
-        scrollView.documentView = canvas; window.contentView = scrollView
+        scrollView.documentView = canvas
+        let container = NSView(frame: CGRect(origin: .zero, size: initial.size))
+        scrollView.frame = container.bounds; scrollView.autoresizingMask = [.width, .height]
+        resizeHandles.frame = container.bounds; resizeHandles.autoresizingMask = [.width, .height]
+        container.addSubview(scrollView); container.addSubview(resizeHandles); window.contentView = container
+        resizeHandles.began = { [weak self] edges, point in
+            guard let self, let region = self.canvas.state.captureRegion else { return }
+            self.canvas.commitText()
+            self.resizeGesture = (region, point, edges, false)
+        }
+        resizeHandles.moved = { [weak self] point in self?.resize(to: point) }
+        resizeHandles.ended = { [weak self] in self?.resizeGesture = nil }
+        if frozenCapture != nil {
+            canvas.cropRequested = { [weak self] rect in
+                guard let self, let source = self.frozenCapture, let previous = self.canvas.state.captureRegion,
+                      rect.width >= 8, rect.height >= 8 else { return false }
+                let next = CGRect(x: previous.minX + rect.minX / source.scale, y: previous.maxY - rect.maxY / source.scale,
+                                  width: rect.width / source.scale, height: rect.height / source.scale)
+                return self.reframe(to: next, remember: true)
+            }
+        }
         let tools = NSSegmentedControl(labels: EditTool.allCases.map(\.rawValue), trackingMode: .selectOne, target: self, action: #selector(selectTool(_:)))
         tools.selectedSegment = 1
         let undo = icon("arrow.uturn.backward", "撤销 ⌘Z", target: canvas, action: #selector(EditorCanvas.undo(_:)))
@@ -294,6 +346,14 @@ extension NSAffineTransform {
         canvas.feedback = { [weak self] message in self?.info.toolTip = message }
         canvas.finishRequested = { [weak self] in self?.completeEditing() }
         canvas.cancelRequested = { [weak self] in self?.cancelEditing() }
+        if frozenCapture != nil {
+            displayObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    self?.displayLayoutChanged = true; self?.resizeGesture = nil; self?.resizeHandles.enabled = false
+                    self?.info.toolTip = "显示器布局或缩放已改变，请完成现有截图或取消后重新框选。"
+                }
+            }
+        }
         layoutCapture()
         window.makeFirstResponder(canvas)
     }
@@ -303,15 +363,35 @@ extension NSAffineTransform {
         button.toolTip = title; button.bezelStyle = .texturedRounded
         return button
     }
+    private func resize(to point: CGPoint) {
+        guard !displayLayoutChanged, let source = frozenCapture, let gesture = resizeGesture else { return }
+        let next = CaptureResizeGeometry.resized(gesture.region, edges: gesture.edges,
+                                                delta: CGPoint(x: point.x - gesture.start.x, y: point.y - gesture.start.y), within: source.bounds, pixelScale: source.scale)
+        if next != canvas.state.captureRegion && reframe(to: next, remember: !gesture.checkpointed) { resizeGesture?.checkpointed = true }
+    }
+    @discardableResult private func reframe(to region: CGRect, remember: Bool) -> Bool {
+        guard !displayLayoutChanged, let source = frozenCapture, let image = source.crop(region) else { info.toolTip = "选区超出已冻结的屏幕范围或像素上限。"; return false }
+        canvas.reframe(image: image, region: region, scale: source.scale, remember: remember)
+        return true
+    }
     private func layoutCapture() {
+        if let region = canvas.state.captureRegion, let source = frozenCapture {
+            canvas.preferredWidth = region.width; canvas.maximumZoom = 1 / source.scale
+        }
         canvas.layoutImage()
         let reserve: CGFloat = canvas.frame.height > anchor.height ? 76 : 0
         let height = min(canvas.frame.height, max(80, anchor.maxY - visibleFrame.minY - reserve))
-        let frame = CGRect(x: anchor.minX, y: anchor.maxY - height, width: min(anchor.width, canvas.frame.width), height: height)
+        let frame = canvas.state.captureRegion ?? CGRect(x: anchor.minX, y: anchor.maxY - height, width: min(anchor.width, canvas.frame.width), height: height)
         window?.setFrame(frame, display: true)
+        resizeHandles.enabled = !displayLayoutChanged && frozenCapture != nil && canvas.state.captureRegion != nil && !isLongImage
         info.stringValue = "\(canvas.state.image.width) × \(canvas.state.image.height)"
+        if frozenCapture?.limitsExpansion == true { info.toolTip = "显示器组合超过快照内存上限，仅能在已冻结范围内调整。" }
         let size = toolbar.contentView!.fittingSize
-        toolbar.setFrame(CaptureLayout.toolbar(near: frame, size: size, within: visibleFrame), display: true)
+        let placement = NSScreen.screens.max { left, right in
+            let a = left.frame.intersection(frame), b = right.frame.intersection(frame)
+            return a.width * a.height < b.width * b.height
+        }?.visibleFrame ?? visibleFrame
+        toolbar.setFrame(CaptureLayout.toolbar(near: frame, size: size, within: placement), display: true)
     }
     override func showWindow(_ sender: Any?) {
         if backdrops.isEmpty {
@@ -319,7 +399,9 @@ extension NSAffineTransform {
                 let backdrop = NSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
                 backdrop.level = .screenSaver; backdrop.backgroundColor = .clear; backdrop.isOpaque = false; backdrop.hasShadow = false
                 backdrop.isReleasedWhenClosed = false; backdrop.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-                backdrop.contentView = EditorBackdrop(frame: CGRect(origin: .zero, size: screen.frame.size))
+                let background = EditorBackdrop(frame: CGRect(origin: .zero, size: screen.frame.size))
+                background.frozenCapture = frozenCapture
+                backdrop.contentView = background
                 backdrops.append(backdrop)
             }
         }
@@ -328,8 +410,15 @@ extension NSAffineTransform {
         window?.makeKeyAndOrderFront(nil); toolbar.orderFrontRegardless()
     }
     override func close() {
+        resizeGesture = nil
+        if let displayObserver { NotificationCenter.default.removeObserver(displayObserver); self.displayObserver = nil }
+        if frozenCapture != nil {
+            anchor = canvas.state.captureRegion ?? anchor
+            canvas.releaseCaptureHistory(); canvas.cropRequested = nil; frozenCapture = nil
+            resizeHandles.enabled = false
+        }
         toolbar.orderOut(nil); toolbar.close()
-        backdrops.forEach { $0.orderOut(nil); $0.close() }; backdrops.removeAll()
+        backdrops.forEach { ($0.contentView as? EditorBackdrop)?.frozenCapture = nil; $0.orderOut(nil); $0.close() }; backdrops.removeAll()
         super.close()
     }
     @objc private func completeEditing() {
