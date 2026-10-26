@@ -49,6 +49,7 @@ jobs:
           lipo 'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' -verify_arch arm64
           lipo 'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' -verify_arch x86_64
           'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' --self-test
+          'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' --update-network-self-test
           'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' --scroll-session-self-test
           scripts/test-dmg.sh
           shasum -a 256 dist/*.zip dist/*.dmg > dist/SHA256SUMS.txt

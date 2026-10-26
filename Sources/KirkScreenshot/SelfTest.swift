@@ -6,6 +6,7 @@ import StitchCore
 @MainActor func runSelfTest() throws {
     try runSelectionSelfTest()
     try runPermissionFlowSelfTest()
+    try runUpdateSelfTest()
     func require(_ condition: Bool, _ message: String) throws { if !condition { throw CaptureError.message(message) } }
     let width = 160, height = 400
     var pixels = [UInt8](repeating: 255, count: width * height * 4)

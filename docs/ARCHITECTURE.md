@@ -12,7 +12,7 @@ AppDelegate（菜单、权限、一次只运行一个捕获会话）
  └─ EditorController / EditorCanvas → paint / render → PNG / 剪贴板
 ```
 
-没有第三方依赖、服务器、网络调用或遥测。不是一个只有 UI 的原型；SwiftPM 编译可执行文件，脚本组装真实 .app。UI 使用 AppKit 便于精确控制非激活面板和鼠标坐标；未来可在不改变核心的情况下使用 SwiftUI 替换设置界面。
+没有第三方依赖、自建服务器或遥测。截图采集和处理不联网；仅用户主动检查更新时访问 GitHub。不是一个只有 UI 的原型；SwiftPM 编译可执行文件，脚本组装真实 .app。UI 使用 AppKit 便于精确控制非激活面板和鼠标坐标；未来可在不改变核心的情况下使用 SwiftUI 替换设置界面。
 
 ## 像素与坐标
 
@@ -67,3 +67,14 @@ EditorController 使用原选区位置的无标题窗口、逐屏半透明遮罩
 原位编辑滚动规则：CaptureScrollView 对普通截图直接忽略 scrollWheel，横纵弹性均为 none；只有图像显示高度超过选区的长图才开启滚动。Annotation 独立保存颜色和原图像素线宽；拖动、文字提交、撤销/重做均保留该样式，改变当前画笔不会修改已有标注。圆形以椭圆路径渲染；等宽高拖动得到圆。打码仍用实心黑色覆盖，不跟随画笔颜色。
 
 ScrollPreviewCanvas 直接绘制已保存的新增条带，只画与当前视口相交的内容，不把整张长图压缩进固定高度的 NSImageView；预览不会改变合成或导出像素。放大时提高可见宽度；关闭跟随后可滚动回看，继续拼接不强制拉回末尾。
+
+
+## 正式版更新
+
+`ReleaseUpdate` 负责数字版本比较、正式 Release 和资源约束、校验值及 ZIP 校验；`UpdateDownload` 负责 HTTPS/已有 gh 连接和独立临时目录；`UpdateWindow` 管理确认、取消和安装占用状态；macOS 专用的 `UpdateBundle` / `UpdateInstaller` 负责签名、架构、同盘替换、备份和回滚。更新不依赖截图权限。
+
+安装助手使用当前程序的副本，运行于用户缓存目录，和 `make dev` 共用互斥锁。助手先核对任务、当前包及候选包并报告就绪，旧进程才退出。固定安装位置且不提权；不会执行下载脚本、移除 quarantine 或重新签名下载包。有 Team ID 的现有安装只接受相同 Team ID。
+
+将来 Windows 实现应复用版本和资源协议及测试向量，另实现平台下载、签名验证和安装后端，不能复用 macOS helper、AppKit 或 Security API。当前代码不宣称 Windows 已验证。
+
+协议来源：[GitHub Releases API](https://docs.github.com/en/rest/releases/releases)、[Release assets API](https://docs.github.com/en/rest/releases/assets)；发行身份与系统验证参见 [Apple Developer ID](https://developer.apple.com/developer-id/)。SHA-256 用于完整性检查，不能替代 Developer ID 信任身份。
