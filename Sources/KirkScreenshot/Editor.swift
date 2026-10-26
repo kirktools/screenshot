@@ -234,7 +234,7 @@ extension NSAffineTransform {
     static func transformScale(_ factor: CGFloat) -> NSAffineTransform { let t = NSAffineTransform(); t.scale(by: factor); return t }
 }
 @MainActor func showError(_ error: Error) {
-    let alert = NSAlert(); alert.window.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 3); alert.messageText = "Kirk Screenshot"; alert.informativeText = error.localizedDescription; alert.runModal()
+    let alert = NSAlert(); alert.window.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 3); alert.messageText = "Screenshot"; alert.informativeText = error.localizedDescription; alert.runModal()
 }
 
 @MainActor final class EditorController: NSWindowController {
@@ -277,7 +277,7 @@ extension NSAffineTransform {
         let window = EditorCaptureWindow(contentRect: initial, styleMask: [.borderless], backing: .buffered, defer: false)
         toolbar = PassivePanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init(window: window)
-        window.title = "Kirk Screenshot · 原位标注"
+        window.title = "Screenshot · 原位标注"
         window.isReleasedWhenClosed = false; window.level = .screenSaver
         window.backgroundColor = .clear; window.isOpaque = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]

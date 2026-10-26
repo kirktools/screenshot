@@ -12,4 +12,4 @@ cat > "$fixture/Contents/Info.plist" <<'PLIST'
 PLIST
 codesign --force --sign - "$fixture"
 KIRK_SCROLL_FIXTURE_EXEC="$fixture/Contents/MacOS/ScrollFixture" \
-  'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' --live-scroll-self-test
+  'dist/Screenshot.app/Contents/MacOS/KirkScreenshot' --live-scroll-self-test

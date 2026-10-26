@@ -10,7 +10,7 @@ export SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.build/cache/clang"
 build_flags=(--cache-path "$PWD/.build/cache/swiftpm")
 if [[ "${KIRK_NATIVE_BUILD:-0}" == 1 ]]; then build_flags+=(--build-system native); fi
 if [[ "${KIRK_DISABLE_BUILD_SANDBOX:-0}" == 1 ]]; then build_flags+=(--disable-sandbox); fi
-app="$PWD/dist/Kirk Screenshot.app"
+app="$PWD/dist/Screenshot.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 if [[ "${UNIVERSAL:-0}" == 1 ]]; then
   package_inputs=$(mktemp -d "$PWD/.build/package-inputs.XXXXXX")

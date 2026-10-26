@@ -134,12 +134,13 @@ actor UpdateDownload {
             try UpdateZipPolicy.validate(data)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             _ = try UpdateCommand.run("/usr/bin/ditto", ["-x", "-k", archive.path, directory.path])
-            let app = directory.appendingPathComponent("Kirk Screenshot.app")
+            let candidates = ["Screenshot.app", "Kirk Screenshot.app"].map { directory.appendingPathComponent($0) }.filter { FileManager.default.fileExists(atPath: $0.path) }
+            guard candidates.count == 1, let app = candidates.first else { throw UpdateError("更新包必须只包含一份应用。") }
             let current = try UpdateBundle.inspect(currentApp)
             let candidate = try UpdateBundle.inspect(app)
             try candidate.requireCompatible(expected: package.version, currentTeam: current.team)
             // 保留系统的下载验证机制，不通过去除隔离属性或重新签名绕过 Gatekeeper。
-            _ = try UpdateCommand.run("/usr/bin/xattr", ["-w", "com.apple.quarantine", "0083;\(String(Int(Date().timeIntervalSince1970), radix: 16));Kirk Screenshot;", app.path])
+            _ = try UpdateCommand.run("/usr/bin/xattr", ["-w", "com.apple.quarantine", "0083;\(String(Int(Date().timeIntervalSince1970), radix: 16));Screenshot;", app.path])
             return PreparedUpdate(root: root, app: app, version: package.version, team: current.team)
         }.value
         try Task.checkCancellation(); keep = true; return prepared

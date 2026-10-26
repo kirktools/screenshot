@@ -56,7 +56,7 @@ python3 scripts/bump-version.py "$bump" >/dev/null
 git add VERSION
 git commit -m "chore: release $tag" --only VERSION
 [[ -z "$(git status --porcelain)" ]] || fail '提交后出现额外改动，停止打标签；请检查 Git hooks。'
-git tag -a "$tag" -m "Kirk Screenshot $tag"
+git tag -a "$tag" -m "Screenshot $tag"
 echo "若推送失败，修复原因后重试：git push --atomic origin HEAD:refs/heads/master refs/tags/$tag"
 git push --atomic origin HEAD:refs/heads/master "refs/tags/$tag"
 trap - ERR

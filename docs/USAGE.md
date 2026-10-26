@@ -14,7 +14,7 @@ scripts/test-core.sh  # 不依赖 XCTest，可用于只有 Command Line Tools �
 make dev            # 更新并启动固定安装路径的测试版
 ```
 
-单独运行 `scripts/build-app.sh` 可生成 `dist/Kirk Screenshot.app` 及与 `VERSION` 对应的 ZIP/DMG 安装包。默认本机构建架构；`UNIVERSAL=1 scripts/build-app.sh` 构建 arm64/x86_64 双架构，`CONFIGURATION=debug` 可改为调试构建。用 Xcode 打开 `Package.swift` 也可浏览调试，但日常运行建议使用固定位置的 `.app`，以稳定权限身份。
+单独运行 `scripts/build-app.sh` 可生成 `dist/Screenshot.app` 及与 `VERSION` 对应的 ZIP/DMG 安装包。默认本机构建架构；`UNIVERSAL=1 scripts/build-app.sh` 构建 arm64/x86_64 双架构，`CONFIGURATION=debug` 可改为调试构建。用 Xcode 打开 `Package.swift` 也可浏览调试，但日常运行建议使用固定位置的 `.app`，以稳定权限身份。
 
 受限执行环境若无法写默认 Swift/Clang 缓存，可把 `CLANG_MODULE_CACHE_PATH` 与 `SWIFTPM_MODULECACHE_OVERRIDE` 指向工作区 `.build/cache/clang`，并为 SwiftPM 指定 `--cache-path`。不应为应用运行关闭系统保护。
 
@@ -26,12 +26,13 @@ make dev            # 更新并启动固定安装路径的测试版
 make dev
 ```
 
-命令构建当前代码（包括未提交修改），校验签名完整性和语言资源，然后退出旧截图进程、备份并更新固定的 `/Applications/Kirk Screenshot.app`，最后启动。只构建本机架构，跳过 ZIP/DMG 打包；不切换分支、不推送、不发版本。需要 Swift 6+、Xcode Command Line Tools 和 Python 3。
+命令构建当前代码（包括未提交修改），校验签名完整性和语言资源，然后退出旧截图进程、备份并更新固定的 `/Applications/Screenshot.app`，最后启动。只构建本机架构，跳过 ZIP/DMG 打包；不切换分支、不推送、不发版本。需要 Swift 6+、Xcode Command Line Tools 和 Python 3。
 
-例如单独验收 PR #6，无需创建或占用已有分支：
+例如通过编号验收 PR，无需创建或占用已有分支（把 123 改为目标 PR 编号）：
 
 ```sh
-git fetch origin pull/6/head
+pr=123
+git fetch origin "pull/$pr/head"
 git switch --detach FETCH_HEAD
 make dev
 ```
@@ -48,13 +49,13 @@ make dev
 
 建议把应用安装到 `/Applications` 后首次启动，并保持唯一的日常安装副本。当前构建仅 **ad-hoc 签名**，不是 Developer ID 签名，也没有 Apple 公证。网络下载的包可能被 Gatekeeper 拦截；确认来源后可按 macOS 提示在“系统设置 → 隐私与安全性”中使用“仍要打开”（若系统允许）。不要关闭 Gatekeeper、SIP 或全局放宽安全策略；本地从源码构建是另一条路径。
 
-第一次启动显示设置；截图前申请“屏幕与系统音频录制 / 屏幕录制”（不同系统名称稍异）。只读屏幕像素，不申请麦克风、辅助功能或输入监控权限。全局快捷键采用 Carbon 热键注册，滚动由你在原应用内完成。
+启动只显示菜单栏图标；通过菜单「设置」在截图前申请“屏幕与系统音频录制 / 屏幕录制”（不同系统名称稍异）。只读屏幕像素，不申请麦克风、辅助功能或输入监控权限。全局快捷键采用 Carbon 热键注册，滚动由你在原应用内完成。
 
-首次拒绝后，使用设置里的权限按钮打开系统设置并勾选 Kirk Screenshot。授权、撤销或重新授权后可能需要退出再启动。若仍失败，确认设置中的应用与正在运行的包路径相同；重建、更换签名或路径可能让系统重新识别应用。不要把每次权限弹窗都当作拼接错误。
+首次拒绝后，使用设置里的「打开系统录屏设置」按钮打开系统设置并勾选 Screenshot。授权、撤销或重新授权后可能需要退出再启动。若仍失败，确认设置中的应用与正在运行的包路径相同；重建、更换签名或路径可能让系统重新识别应用。不要把每次权限弹窗都当作拼接错误。
 
 ## 重启后找不到应用或快捷键无响应
 
-手动启动和双击重新打开 `.app` 都会显示状态窗口；关闭窗口后仍常驻菜单栏。当前未配置随 macOS 登录自动启动，重启电脑后需要手动打开应用。
+手动启动和双击重新打开 `.app` 都仅驻留菜单栏；设置通过菜单或应用激活时 ⌘, 打开。当前未配置随 macOS 登录自动启动，重启电脑后需要手动打开应用。
 
 注册快捷键前会读取 macOS 已启用的系统快捷键。系统可能自定义了 `⌘⇧7`，这时不能仅根据 `RegisterEventHotKey` 返回成功就认为可用：应用会自动尝试备用长截图键 `⌃⌥7`，显示原因并保存实际绑定；区域截图的备用键为 `⌃⌥2`。如果备用键也不可用，窗口会显示提示，可通过按钮截图或另设组合键。请以状态窗口中显示的绑定为准。
 
@@ -104,10 +105,19 @@ MIT License，Copyright © 2026 **kirktools**。
 
 菜单栏或设置中选择「检查更新…」，发现更高正式版后，点击「更新并重启」。仅检查 `kirktools/screenshot` 的非预览 Release，不自动检查、不上传截图，也不安装 PR 构建或降级版本。
 
-应用须位于 `/Applications/Kirk Screenshot.app`，且当前用户可写该目录。更新先验证文件大小、SHA-256、ZIP 路径、包标识、版本、当前架构及代码签名，再备份和替换；助手就绪后旧应用才退出。安装期间不开始新截图；下载时可关闭窗口取消，重新打开可重试。无需 `sudo`。
+应用须位于 `/Applications/Screenshot.app`，且当前用户可写该目录。更新先验证文件大小、SHA-256、ZIP 路径、包标识、版本、当前架构及代码签名，再备份和替换；助手就绪后旧应用才退出。安装期间不开始新截图；下载时可关闭窗口取消，重新打开可重试。无需 `sudo`。
 
 公开仓库直接使用 HTTPS；目前仓库私有时，可复用本机已经安装并登录的 `gh`（需有仓库读取权限）。应用不会读取、保存令牌或自动登录。没有可用权限、正式版或校验文件时会说明原因，不尝试其他来源。
 
 旧版 ZIP 保留在 `~/Library/Caches/com.kirktools.screenshot/Updates/Backups/`，结果记录为同级 `last-result.txt`。替换失败自动恢复旧版；恢复也失败时会保留旧目录并报告位置，可退出应用后从备份解压恢复到 Applications。备份由用户自行清理。
 
 更新不解决未公证应用的系统限制：保留下载隔离标记，macOS 仍可能要求核验后「仍要打开」；ad-hoc 签名改变也可能需要重建录屏授权。后续完成 Developer ID 签名和公证后才能改善这一体验，勿关闭系统安全保护。
+
+
+## 菜单栏与名称
+
+启动或再次打开应用只保留菜单栏图标，不自动弹设置。点击菜单栏的「设置」，或在应用激活时按 **⌘,** 打开设置；关闭后继续驻留。未授权时按截图快捷键只显示简短提示，点击提示中的「打开设置」才进入设置，不自动申请权限。
+
+应用展示名、窗口及安装包内的应用统一为 **Screenshot**，固定安装路径为 `/Applications/Screenshot.app`。Bundle ID 仍是 `com.kirktools.screenshot`，快捷键偏好保留；组织名和仓库仍为 kirktools/screenshot。ZIP/DMG 的 `Kirk-Screenshot-版本-macOS` 下载文件名继续保持，以兼容更新资源协议。
+
+本地 `make dev` 检测到仅有旧的 `/Applications/Kirk Screenshot.app` 时，验证应用身份、备份后迁移到新路径；失败恢复旧名称，不同时保留两份。若新旧两份均存在，或新路径属于其他应用，会停止并说明原因，不覆盖其他软件。手动拖入 DMG 时也应先退出并备份旧版，避免留下两份。路径和 ad-hoc 签名变化后，macOS 仍可能要求重新录屏授权；本命令不重置权限。

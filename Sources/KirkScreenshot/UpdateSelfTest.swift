@@ -12,7 +12,7 @@ private func rejects(_ message: String, _ body: () throws -> Void) throws {
 
 /// 只生成本应用的临时副本，不更新 /Applications，也不访问网络或申请权限。
 func makeUpdateFixture(in root: URL) throws -> URL {
-    let fm = FileManager.default, app = root.appendingPathComponent("Kirk Screenshot.app")
+    let fm = FileManager.default, app = root.appendingPathComponent("Screenshot.app")
     let macOS = app.appendingPathComponent("Contents/MacOS"), resources = app.appendingPathComponent("Contents/Resources")
     try fm.createDirectory(at: macOS, withIntermediateDirectories: true)
     try fm.createDirectory(at: resources, withIntermediateDirectories: true)
@@ -77,7 +77,7 @@ func makeUpdateFixture(in root: URL) throws -> URL {
         data.replaceSubrange(local + 30..<local + 30 + length, with: bytes)
         return data
     }
-    for name in ["../escape/", "/absolute/", "Kirk Screenshot.app/../", "Kirk Screenshot.app\\"] {
+    for name in ["../escape/", "/absolute/", "Screenshot.app/../", "Screenshot.app\\"] {
         try rejects("不安全路径未拒绝") { try UpdateZipPolicy.validate(alteredName(name)) }
     }
     var link = zip
@@ -85,7 +85,7 @@ func makeUpdateFixture(in root: URL) throws -> URL {
     let attributes = UInt32(0o120777) << 16
     for i in 0..<4 { link[at + 38 + i] = UInt8((attributes >> (i * 8)) & 255) }
     try rejects("符号链接未拒绝") { try UpdateZipPolicy.validate(link) }
-    let parent = root.appendingPathComponent("Applications"), destination = parent.appendingPathComponent("Kirk Screenshot.app")
+    let parent = root.appendingPathComponent("Applications"), destination = parent.appendingPathComponent("Screenshot.app")
     try fm.createDirectory(at: parent, withIntermediateDirectories: true)
     try fm.copyItem(at: source, to: destination)
     let marker = destination.appendingPathComponent("old-marker")
@@ -98,7 +98,7 @@ func makeUpdateFixture(in root: URL) throws -> URL {
     var failNew = true
     try rejects("模拟替换失败未报告") {
         try UpdateInstaller.swap(source: source, destination: destination, backupDirectory: backup, move: { from, to in
-            if from.lastPathComponent == "Kirk Screenshot.app" && from.path.contains(".kirk-update-") && failNew { failNew = false; throw UpdateError("install failed") }
+            if from.lastPathComponent == "Screenshot.app" && from.path.contains(".kirk-update-") && failNew { failNew = false; throw UpdateError("install failed") }
             try fm.moveItem(at: from, to: to)
         })
     }
@@ -111,6 +111,25 @@ func makeUpdateFixture(in root: URL) throws -> URL {
     }
     let retained = try fm.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil).first { $0.lastPathComponent.hasPrefix(".kirk-update-") }
     try updateRequire(retained != nil && fm.fileExists(atPath: retained!.appendingPathComponent("previous.app/old-marker").path), "恢复失败没有保留旧目录")
+    // 名称迁移必须先备份旧目录，失败仍恢复旧名称，而不是留下两份应用。
+    let migration = root.appendingPathComponent("migration")
+    try fm.createDirectory(at: migration, withIntermediateDirectories: true)
+    let legacy = migration.appendingPathComponent("Kirk Screenshot.app"), renamed = migration.appendingPathComponent("Screenshot.app")
+    try fm.copyItem(at: source, to: legacy)
+    _ = try UpdateBundle.inspect(legacy)
+    let oldZip = root.appendingPathComponent("legacy.zip")
+    _ = try UpdateCommand.run("/usr/bin/ditto", ["-c", "-k", "--keepParent", legacy.path, oldZip.path])
+    try UpdateZipPolicy.validate(Data(contentsOf: oldZip))
+    try UpdateInstaller.swap(source: source, destination: renamed, backupDirectory: root.appendingPathComponent("migration-backups"), previousDestination: legacy)
+    try updateRequire(!fm.fileExists(atPath: legacy.path) && fm.fileExists(atPath: renamed.path), "改名后留下两份应用")
+    try fm.moveItem(at: renamed, to: legacy)
+    try rejects("改名替换失败未报告") {
+        try UpdateInstaller.swap(source: source, destination: renamed, backupDirectory: root.appendingPathComponent("migration-backups"), previousDestination: legacy, move: { from, to in
+            if to.path == renamed.path { throw UpdateError("rename failure") }
+            try fm.moveItem(at: from, to: to)
+        })
+    }
+    try updateRequire(fm.fileExists(atPath: legacy.path) && !fm.fileExists(atPath: renamed.path), "改名失败没有恢复旧名称")
     print("更新本地回归：数字版本、非法版本、签名/包版本、真实 ZIP、路径/链接拒绝、校验失败、替换回滚与双重失败保留通过")
 }
 

@@ -91,7 +91,7 @@ enum UpdateZipPolicy {
         guard let end, try number(end + 4, 2) == 0, try number(end + 6, 2) == 0 else { throw UpdateError("不支持分卷或不完整的更新 ZIP。") }
         let count = try number(end + 10, 2), start = try number(end + 16, 4), length = try number(end + 12, 4)
         guard count > 0 && count < 8192, try number(end + 8, 2) == count, start + length == end else { throw UpdateError("更新 ZIP 的目录无效或过大。") }
-        var cursor = start, total = 0, paths = Set<String>()
+        var cursor = start, total = 0, paths = Set<String>(), appRoots = Set<String>()
         for _ in 0..<count {
             guard try number(cursor, 4) == 0x02014b50 else { throw UpdateError("更新 ZIP 的目录损坏。") }
             let flags = try number(cursor + 8, 2), method = try number(cursor + 10, 2)
@@ -103,7 +103,8 @@ enum UpdateZipPolicy {
                   let name = String(data: data.subdata(in: nameStart..<nameStart + nameLength), encoding: .utf8) else { throw UpdateError("更新 ZIP 含不支持的条目。") }
             let parts = name.split(separator: "/", omittingEmptySubsequences: false)
             guard !name.hasPrefix("/"), !name.contains("\\"), !name.contains(":"), !name.unicodeScalars.contains(where: { $0.value < 32 }),
-                  !parts.dropLast().contains(""), !parts.contains(".."), !parts.contains("."), parts.first == "Kirk Screenshot.app" || parts.first == "__MACOSX" else { throw UpdateError("更新 ZIP 含不安全路径。") }
+                  !parts.dropLast().contains(""), !parts.contains(".."), !parts.contains("."), ["Screenshot.app", "Kirk Screenshot.app", "__MACOSX"].contains(String(parts.first ?? "")) else { throw UpdateError("更新 ZIP 含不安全路径。") }
+            if parts.first != "__MACOSX", let root = parts.first { appRoots.insert(String(root).lowercased()) }
             let local = try number(cursor + 42, 4)
             guard local >= 0 && local < start, try number(local, 4) == 0x04034b50,
                   try number(local + 6, 2) == flags, try number(local + 8, 2) == method else { throw UpdateError("ZIP 本地目录与中央目录不一致。") }
@@ -116,6 +117,6 @@ enum UpdateZipPolicy {
             guard total <= 512 * 1024 * 1024 else { throw UpdateError("更新解压内容超过 512 MB 限制。") }
             cursor = next
         }
-        guard cursor == end, paths.contains("kirk screenshot.app/contents/info.plist"), paths.contains("kirk screenshot.app/contents/macos/kirkscreenshot") else { throw UpdateError("更新 ZIP 缺少应用文件。") }
+        guard cursor == end, appRoots.count == 1, let root = appRoots.first, paths.contains(root + "/contents/info.plist"), paths.contains(root + "/contents/macos/kirkscreenshot") else { throw UpdateError("更新 ZIP 缺少应用文件。") }
     }
 }
