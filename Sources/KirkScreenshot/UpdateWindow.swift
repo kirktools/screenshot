@@ -15,9 +15,9 @@ import AppKit
     init(canInstall: @escaping () -> Bool, beginInstall: @escaping () -> Bool, endInstall: @escaping () -> Void, client: UpdateDownload = UpdateDownload()) {
         self.canInstall = canInstall; self.beginInstall = beginInstall; self.endInstall = endInstall; self.client = client
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 510, height: 410), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "Kirk Screenshot · 检查更新"; window.isReleasedWhenClosed = false; window.center()
+        window.title = "Screenshot · 检查更新"; window.isReleasedWhenClosed = false; window.center()
         super.init(window: window); window.delegate = self
-        let title = NSTextField(labelWithString: "更新 Kirk Screenshot")
+        let title = NSTextField(labelWithString: "更新 Screenshot")
         title.font = .systemFont(ofSize: 20, weight: .semibold)
         status.maximumNumberOfLines = 5; status.lineBreakMode = .byTruncatingTail
         let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知"

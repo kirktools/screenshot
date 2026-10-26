@@ -2,6 +2,7 @@
 """用临时假应用验证更新与失败回滚，不安装、不退出任何实际应用。"""
 import importlib.util
 from pathlib import Path
+import plistlib
 import tempfile
 import unittest
 from unittest import mock
@@ -17,13 +18,14 @@ class InstallTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix='kirk-dev-test-')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.source = self.root / 'build/Kirk Screenshot.app'
-        self.target = self.root / 'Applications/Kirk Screenshot.app'
+        self.source = self.root / 'build/Screenshot.app'
+        self.target = self.root / 'Applications/Screenshot.app'
         self.backups = self.root / 'backups'
         for app, value in [(self.source, 'new'), (self.target, 'old')]:
             binary = app / 'Contents/MacOS/KirkScreenshot'
             binary.parent.mkdir(parents=True)
             binary.write_text(value)
+            (app / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.kirktools.screenshot'}))
         self.stopped = []
 
     def binary(self):
@@ -38,7 +40,7 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(self.binary().read_text(), 'new')
         self.assertEqual(self.stopped, [True])
         with zipfile.ZipFile(archive) as z:
-            self.assertEqual(z.read('Kirk Screenshot.app/Contents/MacOS/KirkScreenshot'), b'old')
+            self.assertEqual(z.read('Screenshot.app/Contents/MacOS/KirkScreenshot'), b'old')
         self.assertEqual(list(self.target.parent.glob('.kirk-update-*')), [])
 
     def test_invalid_build_keeps_old_and_does_not_stop(self):
@@ -52,7 +54,7 @@ class InstallTests(unittest.TestCase):
     def test_swap_failure_restores_old(self):
         replace = dev.os.replace
         def fail_new(source, target):
-            if Path(source).name == 'Kirk Screenshot.app' and '.kirk-update-' in str(source):
+            if Path(source).name == 'Screenshot.app' and '.kirk-update-' in str(source):
                 raise OSError('simulated installation failure')
             return replace(source, target)
         with mock.patch.object(dev.os, 'replace', side_effect=fail_new):
@@ -84,7 +86,7 @@ class InstallTests(unittest.TestCase):
 
     def test_command_main_updates_fixed_target_and_launches_once(self):
         import shutil
-        shutil.copytree(self.source, self.root / 'dist/Kirk Screenshot.app')
+        shutil.copytree(self.source, self.root / 'dist/Screenshot.app')
         commands = []
         original_run = dev.run
         def execute(args):
@@ -102,6 +104,34 @@ class InstallTests(unittest.TestCase):
         stop.assert_called_once()
         self.assertEqual(commands[-1], ['open', str(self.target)])
         self.assertEqual(len(commands), 2)
+
+    def test_rename_migrates_old_app_and_backs_up(self):
+        legacy = self.target.with_name(dev.LEGACY_NAME)
+        self.target.rename(legacy)
+        backup = dev.install(self.source, self.target, self.backups, validate_app=lambda _: None, stop=lambda: None, previous_target=legacy)
+        self.assertFalse(legacy.exists())
+        self.assertEqual(self.binary().read_text(), 'new')
+        with zipfile.ZipFile(backup) as archive:
+            self.assertEqual(archive.read(f'{legacy.name}/Contents/MacOS/KirkScreenshot'), b'old')
+
+    def test_rename_failure_restores_old_name(self):
+        legacy = self.target.with_name(dev.LEGACY_NAME)
+        self.target.rename(legacy)
+        replace = dev.os.replace
+        def fail_new(source, target):
+            if Path(target) == self.target:
+                raise OSError('new path unavailable')
+            return replace(source, target)
+        with mock.patch.object(dev.os, 'replace', side_effect=fail_new):
+            with self.assertRaises(OSError):
+                dev.install(self.source, self.target, self.backups, validate_app=lambda _: None, stop=lambda: None, previous_target=legacy)
+        self.assertFalse(self.target.exists())
+        self.assertEqual((legacy / 'Contents/MacOS/KirkScreenshot').read_text(), 'old')
+
+    def test_refuses_other_app_identity(self):
+        (self.target / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'other.screenshot'}))
+        with self.assertRaisesRegex(RuntimeError, '其他应用'):
+            dev.owned_install(self.target)
 
     def test_first_install(self):
         import shutil

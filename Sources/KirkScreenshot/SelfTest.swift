@@ -134,7 +134,7 @@ import StitchCore
     let image = NSImage(size: NSSize(width: 1000, height: 1400))
     image.lockFocusFlipped(true)
     NSColor.white.setFill(); CGRect(x: 0, y: 0, width: 1000, height: 1400).fill()
-    ("Kirk Screenshot" as NSString).draw(at: CGPoint(x: 60, y: 55), withAttributes: [.font: NSFont.systemFont(ofSize: 40, weight: .bold), .foregroundColor: NSColor.black])
+    ("Screenshot" as NSString).draw(at: CGPoint(x: 60, y: 55), withAttributes: [.font: NSFont.systemFont(ofSize: 40, weight: .bold), .foregroundColor: NSColor.black])
     ("本机截图 · 手动滚动 · 自动拼接" as NSString).draw(at: CGPoint(x: 60, y: 125), withAttributes: [.font: NSFont.systemFont(ofSize: 26), .foregroundColor: NSColor.darkGray])
     let sections = [
         ("随时唤起", "菜单栏常驻。框选区域，立刻开始截图。"),
@@ -214,25 +214,28 @@ import StitchCore
     print("HOTKEY SMOKE PASSED: Return / Escape, duplicate binding, macOS reserved shortcut rejection, fallback binding")
 }
 
-@MainActor func runStartupSmokeTest(_ delegate: AppDelegate) throws {
-    // 与机器上的旧 hasOpened 偏好无关：重启后必须能看到状态，重开时不能变成无响应。
-    delegate.openSettings()
-    guard let window = NSApp.windows.first(where: { $0.title == "Kirk Screenshot · 设置" }), window.isVisible else {
-        throw CaptureError.message("启动后没有可见的状态窗口")
-    }
-    func buttons(in view: NSView) -> [NSButton] {
-        (view as? NSButton).map { [$0] } ?? view.subviews.flatMap { buttons(in: $0) }
-    }
-    let titles = buttons(in: window.contentView!).map(\.title)
-    guard titles.contains("区域截图"), titles.contains("滚动长截图") else { throw CaptureError.message("缺少无需快捷键的截图入口") }
-    window.close()
-    guard !window.isVisible else { throw CaptureError.message("无法关闭设置窗口") }
+@MainActor func runStartupSmokeTest(_ delegate: AppDelegate) async throws {
+    delegate.configureMenuBar()
+    guard let menu = delegate.menuBarMenu else { throw CaptureError.message("启动缺少菜单栏入口") }
+    guard !NSApp.windows.contains(where: { $0.title == "Screenshot · 设置" && $0.isVisible }) else { throw CaptureError.message("启动自动打开了设置") }
     _ = delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
-    guard window.isVisible else { throw CaptureError.message("关闭设置后再次打开应用未恢复窗口") }
-    _ = delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: true)
-    guard NSApp.windows.filter({ $0.title == window.title }).count == 1 else { throw CaptureError.message("重复打开生成了多个设置窗口") }
+    guard !NSApp.windows.contains(where: { $0.title == "Screenshot · 设置" && $0.isVisible }) else { throw CaptureError.message("再次启动自动打开了设置") }
+    let settings = menu.items.first { $0.title == localized("settings") }!
+    NSApp.sendAction(settings.action!, to: settings.target, from: settings)
+    guard let window = NSApp.windows.first(where: { $0.title == "Screenshot · 设置" }), window.isVisible else { throw CaptureError.message("设置菜单不能打开窗口") }
+    guard NSApp.mainMenu?.items.first?.submenu?.items.contains(where: { $0.keyEquivalent == "," && $0.target as? AppDelegate === delegate }) == true else { throw CaptureError.message("缺少标准设置快捷键") }
     window.close()
-    print("Startup status window, direct capture buttons and reopen behavior verified")
+    delegate.permissionAccess = ScreenPermissionAccess(isAuthorized: { false }, request: { fatalError("截图不能隐式申请权限") }, openSettings: {})
+    delegate.capture(scrolling: false)
+    for _ in 0..<40 where !delegate.hasVisiblePermissionHint { try await Task.sleep(for: .milliseconds(50)) }
+    guard !window.isVisible, delegate.hasVisiblePermissionHint else { throw CaptureError.message("未授权截图没有轻量提示，或擅自弹出设置：" + delegate.permissionHintDiagnostics) }
+    delegate.dismissPermissionHint()
+    _ = delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: true)
+    guard !window.isVisible else { throw CaptureError.message("重开应用弹出了设置") }
+    NSApp.sendAction(settings.action!, to: settings.target, from: settings)
+    guard window.isVisible, NSApp.windows.filter({ $0.title == window.title }).count == 1 else { throw CaptureError.message("不能重复从菜单打开唯一设置窗口") }
+    window.close()
+    print("Quiet startup/reopen, menu settings, command-comma and permission hint verified")
 }
 
 /// 仅渲染本应用控件与生成内容，供文档使用；不读取桌面或私人聊天。
@@ -268,7 +271,7 @@ import StitchCore
     delegate.schedulePermissionRequest = { scheduled.append($0) }
     delegate.permissionAccess = ScreenPermissionAccess(isAuthorized: { authorized }, request: { requests += 1; return false }, openSettings: { settingsOpens += 1 })
     delegate.openSettings()
-    let window = NSApp.windows.first { $0.title == "Kirk Screenshot · 设置" && $0.isVisible }!
+    let window = NSApp.windows.first { $0.title == "Screenshot · 设置" && $0.isVisible }!
     defer { window.close() }
     func buttons(_ view: NSView) -> [NSButton] { (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(buttons) }
     let request = buttons(window.contentView!).first { $0.title == "申请录屏权限" }!
@@ -293,6 +296,8 @@ import StitchCore
     try require(settingsOpens == 1 && requests == 1, "打开设置按钮错误地申请权限")
     window.close()
     _ = delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
-    try require(window.isVisible && NSApp.modalWindow == nil, "权限引导后不能关闭并重开设置")
+    try require(!window.isVisible && NSApp.modalWindow == nil, "关闭设置后重新启动擅自弹出设置")
+    delegate.openSettings()
+    try require(window.isVisible, "显式操作不能重新打开设置")
     print("权限流程：无同步模态、异步单次申请、拒绝/已授权/重复点击、截图快捷键不自动申请、关闭重开通过")
 }

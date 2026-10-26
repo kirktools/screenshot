@@ -3,6 +3,7 @@
 import datetime
 import fcntl
 import os
+import plistlib
 from pathlib import Path
 import shutil
 import signal
@@ -12,7 +13,8 @@ import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
-TARGET = Path('/Applications/Kirk Screenshot.app')
+TARGET = Path('/Applications/Screenshot.app')
+LEGACY_NAME = 'Kirk Screenshot.app'
 
 
 def run(args):
@@ -57,11 +59,14 @@ def stop_instances():
             pass
 
 
-def install(source, target, backups, validate_app=None, stop=None):
+def install(source, target, backups, validate_app=None, stop=None, previous_target=None):
     """同一文件系统内交换目录；任何替换异常都恢复原目录。"""
     validate_app = validate_app or validate
     stop = stop or stop_instances
     source, target, backups = Path(source), Path(target), Path(backups)
+    previous = Path(previous_target) if previous_target else target
+    if previous != target and target.exists():
+        raise RuntimeError("新旧路径同时存在，请先核对并保留一份应用；未改动任何安装。")
     if not source.is_dir():
         raise RuntimeError(f'缺少构建产物：{source}')
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -72,25 +77,25 @@ def install(source, target, backups, validate_app=None, stop=None):
         staged = stage_root / target.name
         run(['ditto', source, staged])
         validate_app(staged)  # 失败时不停止、不改动正在使用的应用。
-        if target.exists():
+        if previous.exists():
             backups.mkdir(parents=True, exist_ok=True)
             stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f')
             backup = backups / f'Kirk-Screenshot-{stamp}.zip'
-            run(['ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', target, backup])
+            run(['ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', previous, backup])
             with zipfile.ZipFile(backup) as archive:
-                if archive.testzip() is not None or f'{target.name}/Contents/MacOS/KirkScreenshot' not in archive.namelist():
+                if archive.testzip() is not None or f'{previous.name}/Contents/MacOS/KirkScreenshot' not in archive.namelist():
                     raise RuntimeError('旧版备份校验失败，未替换应用。')
         stop()
         rollback = stage_root / 'previous.app'
-        had_previous = target.exists()
+        had_previous = previous.exists()
         if had_previous:
-            os.replace(target, rollback)
+            os.replace(previous, rollback)
         try:
             os.replace(staged, target)
         except BaseException:
             if had_previous:
                 try:
-                    os.replace(rollback, target)
+                    os.replace(rollback, previous)
                 except OSError as restore_error:
                     preserve_previous = True
                     raise RuntimeError(f'自动恢复失败，旧应用完整保留在：{rollback}；备份 ZIP：{backup}') from restore_error
@@ -109,8 +114,23 @@ def main():
         install_and_launch()
 
 
+def owned_install(app):
+    if app.is_symlink():
+        raise RuntimeError(f'拒绝替换链接：{app}')
+    with (app / 'Contents/Info.plist').open('rb') as handle:
+        info = plistlib.load(handle)
+    if info.get('CFBundleIdentifier') != 'com.kirktools.screenshot':
+        raise RuntimeError(f'此路径属于其他应用，不会覆盖：{app}')
+
+
 def install_and_launch():
-    backup = install(ROOT / 'dist/Kirk Screenshot.app', TARGET, ROOT / '.build/dev-backups')
+    legacy = TARGET.with_name(LEGACY_NAME)
+    for app in [TARGET, legacy]:
+        if app.exists() or app.is_symlink():
+            owned_install(app)
+    if TARGET.exists() and legacy.exists():
+        raise RuntimeError('检测到新旧两份应用，请先核对并保留一份；没有停止或替换应用。')
+    backup = install(ROOT / 'dist/Screenshot.app', TARGET, ROOT / '.build/dev-backups', previous_target=legacy if legacy.exists() else None)
     register = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
     run([register, '-f', TARGET])
     run(['open', TARGET])

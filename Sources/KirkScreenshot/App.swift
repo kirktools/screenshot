@@ -19,6 +19,7 @@ enum AppLocalization {
                 throw CaptureError.message("安装包语言资源无效：\(language)")
             }
         }
+        guard Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String == "Screenshot", Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String == "Screenshot" else { throw CaptureError.message("应用展示名称未统一") }
         guard localized("capture.normal") != "capture.normal" else { throw CaptureError.message("菜单语言资源加载失败") }
     }
 }
@@ -41,6 +42,8 @@ struct ScreenPermissionAccess {
     private var provider: MacCaptureProvider?
     private var editor: EditorController?
     private var settings: NSWindow?
+    private var permissionHint: PassivePanel?
+    private var permissionHintTimer: Timer?
     private var updateController: AppUpdateController?
     private var busy = false
     private var installingUpdate = false
@@ -77,8 +80,10 @@ struct ScreenPermissionAccess {
             return
         }
         if CommandLine.arguments.contains("--startup-smoke-test") {
-            do { try runStartupSmokeTest(self); print("STARTUP SMOKE PASSED"); NSApp.terminate(nil) }
-            catch { fputs("STARTUP SMOKE FAILED: \(error)\n", stderr); exit(1) }
+            Task { @MainActor in
+                do { try await runStartupSmokeTest(self); print("STARTUP SMOKE PASSED"); NSApp.terminate(nil) }
+                catch { fputs("STARTUP SMOKE FAILED: \(error)\n", stderr); exit(1) }
+            }
             return
         }
         if CommandLine.arguments.contains("--live-scroll-self-test") {
@@ -125,13 +130,43 @@ struct ScreenPermissionAccess {
             MainActor.assumeIsolated { self?.lastExternalApp = running }
         }
         normal = load("screenshot.region", fallback: .normal); scroll = load("screenshot.scroll", fallback: .scroll)
-        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "Kirk Screenshot")
-        buildMainMenu(); registerTools(); refreshMenu()
+        configureMenuBar(); registerTools(); refreshMenu()
         if CommandLine.arguments.contains("--demo-editor") { present(makeDemoImage()); return }
-        // 手动启动和权限重启后给出可见状态，避免菜单栏应用看起来没有启动。
-        openSettings()
+        // 菜单栏工具启动时保持安静；设置只由明确的菜单或快捷键动作打开。
     }
+    func configureMenuBar() {
+        guard item == nil else { return }
+        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.button?.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "Screenshot")
+        item.button?.toolTip = "Screenshot · 点击开始截图或打开设置"
+        buildMainMenu(); refreshMenu()
+    }
+    func showPermissionHint() {
+        let panel = permissionHint ?? PassivePanel(contentRect: CGRect(x: 0, y: 0, width: 288, height: 112), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.level = .floating; panel.isReleasedWhenClosed = false; panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        let label = NSTextField(wrappingLabelWithString: "截图需要屏幕录制权限。请在设置中申请或检查当前应用的权限。")
+        let settings = NSButton(title: "打开设置…", target: self, action: #selector(openSettings))
+        let close = NSButton(title: "关闭", target: self, action: #selector(dismissPermissionHint))
+        let actions = NSStackView(views: [settings, close]); actions.spacing = 10
+        let stack = NSStackView(views: [label, actions]); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 10
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        label.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        panel.contentView = stack
+        // 使用与长图提示相同的非激活面板，避免依赖菜单栏宿主和弹出框焦点。
+        let point = NSEvent.mouseLocation
+        let bounds = (NSScreen.screens.first { $0.frame.contains(point) } ?? NSScreen.main)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 800, height: 600)
+        panel.setFrame(CGRect(x: bounds.maxX - 304, y: bounds.maxY - 128, width: 288, height: 112), display: true)
+        permissionHint = panel; panel.orderFrontRegardless()
+        permissionHintTimer?.invalidate()
+        permissionHintTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.dismissPermissionHint() }
+        }
+    }
+    var menuBarMenu: NSMenu? { item?.menu }
+    var permissionHintDiagnostics: String { "hint=\(String(describing: permissionHint?.frame)) visible=\(String(describing: permissionHint?.isVisible)) settings=\(String(describing: settings?.isVisible))" }
+    var hasVisiblePermissionHint: Bool { permissionHint?.isVisible == true }
+    @objc func dismissPermissionHint() { permissionHintTimer?.invalidate(); permissionHintTimer = nil; permissionHint?.orderOut(nil) }
     private func load(_ key: String, fallback: Shortcut) -> Shortcut {
         guard let data = UserDefaults.standard.data(forKey: key), let value = try? JSONDecoder().decode(Shortcut.self, from: data) else { return fallback }; return value
     }
@@ -153,7 +188,7 @@ struct ScreenPermissionAccess {
     private func refreshMenu() {
         guard item != nil else { return }
         let menu = NSMenu()
-        let title = NSMenuItem(title: "Kirk Screenshot", action: nil, keyEquivalent: ""); menu.addItem(title)
+        let title = NSMenuItem(title: "Screenshot", action: nil, keyEquivalent: ""); menu.addItem(title)
         menu.addItem(.separator())
         add(menu, "\(localized("capture.normal"))   \(normal.label)", #selector(normalCapture))
         add(menu, "\(localized("capture.scroll"))   \(scroll.label)", #selector(scrollCapture))
@@ -165,7 +200,9 @@ struct ScreenPermissionAccess {
     private func buildMainMenu() {
         let menu = NSMenu(), app = NSMenu(), edit = NSMenu()
         let appItem = NSMenuItem(); appItem.submenu = app; menu.addItem(appItem)
-        let quit = NSMenuItem(title: "退出 Kirk Screenshot", action: #selector(quit), keyEquivalent: "q"); quit.target = self; app.addItem(quit)
+        let settings = NSMenuItem(title: localized("settings"), action: #selector(openSettings), keyEquivalent: ",")
+        settings.target = self; app.addItem(settings); app.addItem(.separator())
+        let quit = NSMenuItem(title: "退出 Screenshot", action: #selector(quit), keyEquivalent: "q"); quit.target = self; app.addItem(quit)
         let editItem = NSMenuItem(title: "编辑", action: nil, keyEquivalent: ""); editItem.submenu = edit; menu.addItem(editItem)
         edit.addItem(withTitle: "撤销", action: #selector(EditorCanvas.undo(_:)), keyEquivalent: "z")
         let redo = edit.addItem(withTitle: "重做", action: #selector(EditorCanvas.redo(_:)), keyEquivalent: "z"); redo.keyEquivalentModifierMask = [.command, .shift]
@@ -181,7 +218,7 @@ struct ScreenPermissionAccess {
     @objc private func scrollCapture() { capture(scrolling: true) }
     func capture(scrolling: Bool) {
         guard !busy && !installingUpdate else { return }
-        guard permissionAccess.isAuthorized() else { openSettings(); return }
+        guard permissionAccess.isAuthorized() else { showPermissionHint(); return }
         busy = true
         let frontmost = NSWorkspace.shared.frontmostApplication
         previousApp = frontmost?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? lastExternalApp : frontmost
@@ -288,9 +325,10 @@ struct ScreenPermissionAccess {
     }
     @objc private func openPrivacy() { permissionAccess.openSettings() }
     @objc func openSettings() {
+        dismissPermissionHint()
         if let settings { refreshSettingsStatus(); NSApp.activate(ignoringOtherApps: true); settings.makeKeyAndOrderFront(nil); return }
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 610, height: 610), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "Kirk Screenshot · 设置"; window.isReleasedWhenClosed = false; window.center()
+        window.title = "Screenshot · 设置"; window.isReleasedWhenClosed = false; window.center()
         let title = NSTextField(labelWithString: "随时截图，内容留在本机。")
         title.font = .systemFont(ofSize: 22, weight: .semibold)
         let help = NSTextField(wrappingLabelWithString: "点击快捷键框，再按新的组合键。长截图时请框选可滚动正文，避开固定顶部栏、输入框和悬浮按钮；可连续向下滚动，无需逐次停顿；快速跳跃或内容重排可能无法接续。")
@@ -355,7 +393,7 @@ struct ScreenPermissionAccess {
     }
     func applicationDidBecomeActive(_ notification: Notification) { refreshSettingsStatus() }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !busy { openSettings() }
+        // 再次启动只复用菜单栏进程，不把设置当主窗口。
         return false
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }

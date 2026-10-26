@@ -47,7 +47,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
                     NSColor(calibratedRed: 0.12, green: 0.3, blue: 0.56, alpha: 1).setFill()
                     NSBezierPath(roundedRect: CGRect(x: 170 * scale, y: CGFloat(height) - top - 38 * scale, width: CGFloat(width) - 205 * scale, height: 46 * scale), xRadius: 12 * scale, yRadius: 12 * scale).fill()
                 }
-                let showcaseLines = ["Kirk Screenshot", "把截图变成一件顺手的小事。", "01  随时唤起", "菜单栏常驻，按下快捷键就能开始。", "不用先打开微信，也不用切换应用。", "02  连续滚动", "框选正文，像平时一样向下滚动。", "自动捕获与拼接，预览一直看得见。", "03  复制就走", "回车直接复制，需要时再编辑。", "保存 PNG，把完整内容分享出去。", "04  内容留在本机", "无需注册，不上传截图。", "默认中文，使用原生 macOS 控件。", "05  少一点打扰", "正常滚动保持安静，出错再提示。"]
+                let showcaseLines = ["Screenshot", "把截图变成一件顺手的小事。", "01  随时唤起", "菜单栏常驻，按下快捷键就能开始。", "不用先打开微信，也不用切换应用。", "02  连续滚动", "框选正文，像平时一样向下滚动。", "自动捕获与拼接，预览一直看得见。", "03  复制就走", "回车直接复制，需要时再编辑。", "保存 PNG，把完整内容分享出去。", "04  内容留在本机", "无需注册，不上传截图。", "默认中文，使用原生 macOS 控件。", "05  少一点打扰", "正常滚动保持安静，出错再提示。"]
                 let text = showcase ? showcaseLines[line % showcaseLines.count] : ["第 \(line) 段：连续滚动，保留文字与段落间距。", "• ScreenCaptureKit 测试 \(line * 7919)，浅色细字 / dark theme", "收到消息 \(line)：正文较短。", "let offset = \(line * 37);  // 不应重复，也不应缺行"] [line % 4]
                 (text as NSString).draw(at: CGPoint(x: CGFloat(line % 7 == 4 ? 190 : 30) * scale, y: CGFloat(height) - top - 24 * scale),
                     withAttributes: [.font: NSFont.systemFont(ofSize: 15 * scale), .foregroundColor: NSColor(calibratedWhite: 0.86, alpha: 1)])

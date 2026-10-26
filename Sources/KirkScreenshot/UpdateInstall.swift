@@ -7,7 +7,7 @@ struct UpdateBundle {
     let team: String?
     static func inspect(_ app: URL) throws -> UpdateBundle {
         let fm = FileManager.default
-        guard app.lastPathComponent == "Kirk Screenshot.app", let iterator = fm.enumerator(at: app, includingPropertiesForKeys: [.isSymbolicLinkKey, .fileSizeKey]) else { throw UpdateError("更新中没有正确的应用目录。") }
+        guard ["Screenshot.app", "Kirk Screenshot.app"].contains(app.lastPathComponent), let iterator = fm.enumerator(at: app, includingPropertiesForKeys: [.isSymbolicLinkKey, .fileSizeKey]) else { throw UpdateError("更新中没有正确的应用目录。") }
         var total = 0
         for case let url as URL in iterator {
             let values = try url.resourceValues(forKeys: [.isSymbolicLinkKey, .fileSizeKey])
@@ -70,7 +70,11 @@ struct UpdateBundle {
 }
 
 enum UpdatePaths {
-    static let destination = URL(fileURLWithPath: "/Applications/Kirk Screenshot.app", isDirectory: true)
+    static let destination = URL(fileURLWithPath: "/Applications/Screenshot.app", isDirectory: true)
+    static let legacyDestination = URL(fileURLWithPath: "/Applications/Kirk Screenshot.app", isDirectory: true)
+    static func isInstalledPath(_ app: URL) -> Bool {
+        [destination.path, legacyDestination.path].contains(app.standardizedFileURL.path)
+    }
     static var cache: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("com.kirktools.screenshot/Updates", isDirectory: true) }
     static var receipt: URL { cache.appendingPathComponent("last-result.txt") }
 }
@@ -82,16 +86,17 @@ struct PreparedUpdate {
     func clean() { try? FileManager.default.removeItem(at: root) }
     /// 辅助进程复制到缓存，不从即将被替换的旧应用内执行。
     func startHelper(parent: Int32, currentApp: URL) async throws -> Process {
-        guard currentApp.standardizedFileURL.path == UpdatePaths.destination.standardizedFileURL.path,
+        guard UpdatePaths.isInstalledPath(currentApp),
               FileManager.default.isWritableFile(atPath: UpdatePaths.destination.deletingLastPathComponent().path) else {
-            throw UpdateError("请先安装到 /Applications/Kirk Screenshot.app，并确保当前用户可写。不会自动使用管理员权限。")
+            throw UpdateError("请先安装到 /Applications/Screenshot.app，并确保当前用户可写。不会自动使用管理员权限。")
         }
+        if currentApp.standardizedFileURL.path != UpdatePaths.destination.path && FileManager.default.fileExists(atPath: UpdatePaths.destination.path) { throw UpdateError("新旧应用同时存在，请先核对并保留一份。未替换应用。") }
         let helper = root.appendingPathComponent("UpdateInstaller")
         try? FileManager.default.removeItem(at: helper)
         try? FileManager.default.removeItem(at: root.appendingPathComponent("ready.txt"))
         try FileManager.default.copyItem(at: currentApp.appendingPathComponent("Contents/MacOS/KirkScreenshot"), to: helper)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
-        let manifest = UpdateManifest(parentPID: parent, app: app.path, version: version.description, team: team)
+        let manifest = UpdateManifest(parentPID: parent, app: app.path, version: version.description, team: team, installedApp: currentApp.path)
         let file = root.appendingPathComponent("manifest.json")
         try JSONEncoder().encode(manifest).write(to: file, options: .atomic)
         let process = Process(); process.executableURL = helper; process.arguments = ["--apply-update", file.path]
@@ -121,28 +126,31 @@ struct UpdateManifest: Codable {
     let parentPID: Int32
     let app: String, version: String
     let team: String?
+    let installedApp: String
 }
 
 /// 同盘目录替换，不覆写运行中 Mach-O；失败保留旧目录和 ZIP，下一次检查可读结果。
 enum UpdateInstaller {
-    static func swap(source: URL, destination: URL, backupDirectory: URL,
+    static func swap(source: URL, destination: URL, backupDirectory: URL, previousDestination: URL? = nil,
                      validate: (URL) throws -> Void = { _ in }, move: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) }) throws {
         let fm = FileManager.default
+        let previous = previousDestination ?? destination
+        guard previous.path == destination.path || !fm.fileExists(atPath: destination.path) else { throw UpdateError("新旧应用同时存在，停止更新。") }
         let staging = destination.deletingLastPathComponent().appendingPathComponent(".kirk-update-\(UUID().uuidString)")
         try fm.createDirectory(at: staging, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        let newApp = staging.appendingPathComponent("Kirk Screenshot.app"), oldApp = staging.appendingPathComponent("previous.app")
+        let newApp = staging.appendingPathComponent("Screenshot.app"), oldApp = staging.appendingPathComponent("previous.app")
         var preserve = false
         defer { if !preserve { try? fm.removeItem(at: staging) } }
         _ = try UpdateCommand.run("/usr/bin/ditto", [source.path, newApp.path])
         try validate(newApp)
-        guard fm.fileExists(atPath: destination.path) else { throw UpdateError("原应用已移动或移除，停止更新。") }
+        guard fm.fileExists(atPath: previous.path) else { throw UpdateError("原应用已移动或移除，停止更新。") }
         try fm.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
         let backup = backupDirectory.appendingPathComponent("Kirk-Screenshot-\(UUID().uuidString).zip")
-        _ = try UpdateCommand.run("/usr/bin/ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", destination.path, backup.path])
-        try move(destination, oldApp)
+        _ = try UpdateCommand.run("/usr/bin/ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", previous.path, backup.path])
+        try move(previous, oldApp)
         do { try move(newApp, destination) }
         catch {
-            do { try move(oldApp, destination) }
+            do { try move(oldApp, previous) }
             catch { preserve = true; throw UpdateError("自动恢复失败，旧应用保留在 \(oldApp.path)；备份为 \(backup.path)。") }
             throw UpdateError("安装失败，已恢复旧版。备份：\(backup.path)")
         }
@@ -152,19 +160,21 @@ enum UpdateInstaller {
         guard url.lastPathComponent == "manifest.json", url.deletingLastPathComponent().lastPathComponent.hasPrefix("pending-"),
               url.deletingLastPathComponent().deletingLastPathComponent().path == UpdatePaths.cache.standardizedFileURL.path else { return 1 }
         let root = url.deletingLastPathComponent()
+        var originalURL = UpdatePaths.destination
         do {
             guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max) < 8192 else { throw UpdateError("更新任务信息过大。") }
             let data = try Data(contentsOf: url)
             guard data.count < 8192 else { throw UpdateError("更新任务信息过大。") }
             let manifest = try JSONDecoder().decode(UpdateManifest.self, from: data)
-            guard manifest.parentPID > 1, URL(fileURLWithPath: manifest.app).standardizedFileURL.path == root.appendingPathComponent("extracted/Kirk Screenshot.app").path else { throw UpdateError("更新任务路径无效。") }
+            guard manifest.parentPID > 1, UpdatePaths.isInstalledPath(URL(fileURLWithPath: manifest.installedApp)), ["Screenshot.app", "Kirk Screenshot.app"].contains(where: { URL(fileURLWithPath: manifest.app).standardizedFileURL.path == root.appendingPathComponent("extracted/" + $0).path }) else { throw UpdateError("更新任务路径无效。") }
+            originalURL = URL(fileURLWithPath: manifest.installedApp).standardizedFileURL
             let lock = fm.temporaryDirectory.appendingPathComponent("kirk-screenshot-dev-install.lock")
             let descriptor = open(lock.path, O_CREAT | O_RDWR, 0o600)
             guard descriptor >= 0 else { throw UpdateError("无法创建安装互斥锁。") }
             defer { close(descriptor) }
             guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { throw UpdateError("另一更新任务正在安装，已取消重复更新。") }
             let version = try ReleaseVersion(manifest.version)
-            let original = try UpdateBundle.inspect(UpdatePaths.destination)
+            let original = try UpdateBundle.inspect(originalURL)
             guard original.version < version, original.team == manifest.team else { throw UpdateError("当前应用的版本或签名已改变，请重新检查更新。") }
             try UpdateBundle.inspect(URL(fileURLWithPath: manifest.app)).requireCompatible(expected: version, currentTeam: original.team)
             try "ready".write(to: root.appendingPathComponent("ready.txt"), atomically: true, encoding: .utf8)
@@ -172,7 +182,7 @@ enum UpdateInstaller {
             while kill(manifest.parentPID, 0) == 0 && Date() < deadline { Thread.sleep(forTimeInterval: 0.1) }
             guard kill(manifest.parentPID, 0) != 0 else { throw UpdateError("原应用尚未退出，未进行安装。") }
             try swap(source: URL(fileURLWithPath: manifest.app), destination: UpdatePaths.destination,
-                     backupDirectory: UpdatePaths.cache.appendingPathComponent("Backups"), validate: { app in
+                     backupDirectory: UpdatePaths.cache.appendingPathComponent("Backups"), previousDestination: originalURL, validate: { app in
                 try UpdateBundle.inspect(app).requireCompatible(expected: version, currentTeam: original.team)
             })
             try "已更新到 \(version)。旧版备份保留在 \(UpdatePaths.cache.appendingPathComponent("Backups").path)。".write(to: UpdatePaths.receipt, atomically: true, encoding: .utf8)
@@ -183,7 +193,8 @@ enum UpdateInstaller {
             try? error.localizedDescription.write(to: root.appendingPathComponent("ready.txt"), atomically: true, encoding: .utf8)
             try? fm.createDirectory(at: UpdatePaths.cache, withIntermediateDirectories: true)
             try? "上次更新失败：\(error.localizedDescription)".write(to: UpdatePaths.receipt, atomically: true, encoding: .utf8)
-            if fm.fileExists(atPath: UpdatePaths.destination.path) { _ = try? UpdateCommand.run("/usr/bin/open", [UpdatePaths.destination.path]) }
+            let reopen = fm.fileExists(atPath: originalURL.path) ? originalURL : UpdatePaths.destination
+            if fm.fileExists(atPath: reopen.path) { _ = try? UpdateCommand.run("/usr/bin/open", [reopen.path]) }
             return 1
         }
     }
