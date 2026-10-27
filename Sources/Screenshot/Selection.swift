@@ -3,20 +3,37 @@ import AppKit
 /// Quartz 窗口坐标以主显示器左上为原点；选择器统一使用 AppKit 屏幕点坐标。
 /// 每次唤起只读取一次窗口列表，保持前后顺序；不查询标题或辅助功能树。
 enum WindowPreselection {
-    static func regions(from info: [[String: Any]], excludingPID: Int32, screenTop: CGFloat, desktop: CGRect) -> [CGRect] {
-        info.compactMap { entry in
+    static func regions(from info: [[String: Any]], excludingPID: Int32, screenTop: CGFloat, desktop: CGRect, screens: [CGRect]? = nil) -> [CGRect] {
+        let menuLayers = [Int(CGWindowLevelForKey(.mainMenuWindow)), Int(CGWindowLevelForKey(.statusWindow))]
+        var menuBars: [CGRect] = []
+        var windows: [CGRect] = []
+        for entry in info {
             guard let pid = entry[kCGWindowOwnerPID as String] as? NSNumber, pid.int32Value != excludingPID,
-                  let layer = entry[kCGWindowLayer as String] as? NSNumber, layer.intValue == 0,
+                  let layer = entry[kCGWindowLayer as String] as? NSNumber,
                   let alpha = entry[kCGWindowAlpha as String] as? NSNumber, alpha.doubleValue > 0,
                   let bounds = entry[kCGWindowBounds as String] as? NSDictionary,
                   let quartz = CGRect(dictionaryRepresentation: bounds as CFDictionary),
                   quartz.minX.isFinite, quartz.minY.isFinite, quartz.width.isFinite, quartz.height.isFinite,
-                  quartz.width >= 32, quartz.height >= 32 else { return nil }
-            let screen = CGRect(x: quartz.minX, y: screenTop - quartz.maxY, width: quartz.width, height: quartz.height)
-            let visible = screen.intersection(desktop)
-            guard !visible.isNull, visible.width >= 32, visible.height >= 32 else { return nil }
-            return visible.integral
+                  quartz.width > 0, quartz.height > 0 else { continue }
+            let rect = CGRect(x: quartz.minX, y: screenTop - quartz.maxY, width: quartz.width, height: quartz.height)
+            if menuLayers.contains(layer.intValue), rect.height >= 16, rect.height <= 64 {
+                for screen in screens ?? [desktop] {
+                    let part = rect.intersection(screen)
+                    // 只承认可见且已展开的顶部条带，不能把高层通知/面板或移出屏幕的隐藏菜单当作菜单栏。
+                    guard !part.isNull, part.width > 0, part.height >= 16,
+                          abs(rect.maxY - screen.maxY) <= 1 else { continue }
+                    let bar = CGRect(x: screen.minX, y: screen.maxY - part.height, width: screen.width, height: part.height).integral
+                    if let index = menuBars.firstIndex(where: { $0.minX == bar.minX && $0.maxX == bar.maxX && $0.maxY == bar.maxY }) {
+                        menuBars[index] = menuBars[index].union(bar)
+                    } else { menuBars.append(bar) }
+                }
+            } else if layer.intValue == 0, rect.width >= 32, rect.height >= 32 {
+                let visible = rect.intersection(desktop)
+                if !visible.isNull, visible.width >= 32, visible.height >= 32 { windows.append(visible.integral) }
+            }
         }
+        // 菜单栏优先于覆盖到屏幕顶边的普通窗口；普通窗口仍保持原本前后顺序。
+        return menuBars + windows
     }
 }
 
@@ -27,8 +44,13 @@ struct RegionSelectionState {
     private var start: CGPoint?
     private var drawing = false
     init(candidates: [CGRect]) { self.candidates = candidates }
+    var canConfirmSelection: Bool {
+        guard selection.width >= 32 else { return false }
+        return selection.height >= 32 || (!drawing && selection.height >= 16 && candidates.contains(selection))
+    }
     mutating func hover(at point: CGPoint) {
         guard start == nil else { return }
+        drawing = false
         selection = candidates.first { $0.contains(point) } ?? .zero
     }
     mutating func mouseDown(at point: CGPoint) {
@@ -46,7 +68,7 @@ struct RegionSelectionState {
         drag(to: point)
         start = nil
         // 一旦开始手动拖选，即使最后区域太小，也不能回退误选整个窗口。
-        return selection.width >= 32 && selection.height >= 32 ? selection : nil
+        return canConfirmSelection ? selection : nil
     }
 }
 
@@ -81,7 +103,7 @@ final class SelectionWindow: NSWindow {
         else {
             let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
             regions = WindowPreselection.regions(from: info, excludingPID: ProcessInfo.processInfo.processIdentifier,
-                                                 screenTop: screens.first?.frame.maxY ?? 0, desktop: desktop)
+                                                 screenTop: screens.first?.frame.maxY ?? 0, desktop: desktop, screens: screens.map(\.frame))
         }
         state = RegionSelectionState(candidates: regions)
         state.hover(at: NSEvent.mouseLocation)
@@ -138,7 +160,7 @@ final class SelectionWindow: NSWindow {
     func finish(cancel: Bool = false) {
         guard !windows.isEmpty else { return }
         let selection = state.selection
-        guard cancel || (selection.width >= 32 && selection.height >= 32) else { return }
+        guard cancel || state.canConfirmSelection else { return }
         let result: CGRect? = cancel ? nil : selection
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor); self.keyMonitor = nil }
         if let activationObserver { NotificationCenter.default.removeObserver(activationObserver); self.activationObserver = nil }
