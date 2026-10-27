@@ -82,9 +82,9 @@ make dev
 ```bash
 scripts/test-core.sh
 swift test  # 完整 Xcode 环境 / CI
-swift run KirkScreenshot --self-test
+swift run Screenshot --self-test
 # 可选：验证真实剪贴板，随后恢复已有数据
-KIRK_TEST_CLIPBOARD=1 swift run KirkScreenshot --self-test
+SCREENSHOT_TEST_CLIPBOARD=1 swift run Screenshot --self-test
 ```
 
 算法测试覆盖精确重叠、重复帧、重复纹理、重叠不足、噪声、Retina 高度、像素尺寸变化、同视口缩放、反向滚动、固定栏及动态内容拒绝。`--self-test` 不读取桌面，验证真实 CGImage 拼接方向、编辑渲染、裁剪撤销/重做、PNG 编解码、打码像素与文件写入；默认测试 PNG 写入系统临时目录。真实交互见[验收清单](ACCEPTANCE.md)。
@@ -118,6 +118,6 @@ MIT License，Copyright © 2026 **kirktools**。
 
 启动或再次打开应用只保留菜单栏图标，不自动弹设置。点击菜单栏的「设置」，或在应用激活时按 **⌘,** 打开设置；关闭后继续驻留。未授权时按截图快捷键只显示简短提示，点击提示中的「打开设置」才进入设置，不自动申请权限。
 
-应用展示名、窗口及安装包内的应用统一为 **Screenshot**，固定安装路径为 `/Applications/Screenshot.app`。Bundle ID 仍是 `com.kirktools.screenshot`，快捷键偏好保留；组织名和仓库仍为 kirktools/screenshot。ZIP/DMG 的 `Kirk-Screenshot-版本-macOS` 下载文件名继续保持，以兼容更新资源协议。
+应用展示名、窗口及安装包内的应用统一为 **Screenshot**，固定安装路径为 `/Applications/Screenshot.app`。Bundle ID 仍是 `com.kirktools.screenshot`，快捷键偏好保留；组织名和仓库仍为 kirktools/screenshot。新 ZIP/DMG 使用 `Screenshot-版本-macOS`；更新器仍可读取旧的 `Kirk-Screenshot-版本-macOS.zip` 资源。
 
 本地 `make dev` 检测到仅有旧的 `/Applications/Kirk Screenshot.app` 时，验证应用身份、备份后迁移到新路径；失败恢复旧名称，不同时保留两份。若新旧两份均存在，或新路径属于其他应用，会停止并说明原因，不覆盖其他软件。手动拖入 DMG 时也应先退出并备份旧版，避免留下两份。路径和 ad-hoc 签名变化后，macOS 仍可能要求重新录屏授权；本命令不重置权限。

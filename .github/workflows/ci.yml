@@ -23,6 +23,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: 公开内容与隐私防回归
+        run: |
+          python3 scripts/test-public-content.py
+          python3 scripts/check-public-content.py
       - name: 检查 Xcode 与 Swift 工具链
         run: |
           test -d "$DEVELOPER_DIR"
@@ -43,14 +47,14 @@ jobs:
       - name: DMG 挂载与包内容验证
         run: scripts/test-dmg.sh
       - name: 原生渲染与导出测试（不读取桌面）
-        run: "'dist/Screenshot.app/Contents/MacOS/KirkScreenshot' --self-test"
+        run: "'dist/Screenshot.app/Contents/MacOS/Screenshot' --self-test"
       - name: 应用更新回归（模拟网络与临时应用，不安装）
-        run: "'dist/Screenshot.app/Contents/MacOS/KirkScreenshot' --update-network-self-test"
+        run: "'dist/Screenshot.app/Contents/MacOS/Screenshot' --update-network-self-test"
       - name: 连续滚动会话回归（合成帧，不读取桌面）
-        run: "'dist/Screenshot.app/Contents/MacOS/KirkScreenshot' --scroll-session-self-test"
+        run: "'dist/Screenshot.app/Contents/MacOS/Screenshot' --scroll-session-self-test"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: Kirk-Screenshot-${{ matrix.os }}
+          name: Screenshot-${{ matrix.os }}
           path: |
             dist/*.zip
             dist/*.dmg

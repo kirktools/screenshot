@@ -15,21 +15,21 @@ spec.loader.exec_module(dev)
 
 class InstallTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix='kirk-dev-test-')
+        self.temp = tempfile.TemporaryDirectory(prefix='screenshot-dev-test-')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.source = self.root / 'build/Screenshot.app'
         self.target = self.root / 'Applications/Screenshot.app'
         self.backups = self.root / 'backups'
         for app, value in [(self.source, 'new'), (self.target, 'old')]:
-            binary = app / 'Contents/MacOS/KirkScreenshot'
+            binary = app / 'Contents/MacOS/Screenshot'
             binary.parent.mkdir(parents=True)
             binary.write_text(value)
-            (app / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.kirktools.screenshot'}))
+            (app / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.kirktools.screenshot', 'CFBundleExecutable': 'Screenshot'}))
         self.stopped = []
 
     def binary(self):
-        return self.target / 'Contents/MacOS/KirkScreenshot'
+        return self.target / 'Contents/MacOS/Screenshot'
 
     def update(self, validate=lambda _: None, stop=None):
         return dev.install(self.source, self.target, self.backups, validate_app=validate,
@@ -40,8 +40,8 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(self.binary().read_text(), 'new')
         self.assertEqual(self.stopped, [True])
         with zipfile.ZipFile(archive) as z:
-            self.assertEqual(z.read('Screenshot.app/Contents/MacOS/KirkScreenshot'), b'old')
-        self.assertEqual(list(self.target.parent.glob('.kirk-update-*')), [])
+            self.assertEqual(z.read('Screenshot.app/Contents/MacOS/Screenshot'), b'old')
+        self.assertEqual(list(self.target.parent.glob('.screenshot-update-*')), [])
 
     def test_invalid_build_keeps_old_and_does_not_stop(self):
         def reject(_):
@@ -54,7 +54,7 @@ class InstallTests(unittest.TestCase):
     def test_swap_failure_restores_old(self):
         replace = dev.os.replace
         def fail_new(source, target):
-            if Path(source).name == 'Screenshot.app' and '.kirk-update-' in str(source):
+            if Path(source).name == 'Screenshot.app' and '.screenshot-update-' in str(source):
                 raise OSError('simulated installation failure')
             return replace(source, target)
         with mock.patch.object(dev.os, 'replace', side_effect=fail_new):
@@ -72,7 +72,7 @@ class InstallTests(unittest.TestCase):
         with mock.patch.object(dev.os, 'replace', side_effect=fail_both):
             with self.assertRaisesRegex(RuntimeError, '旧应用完整保留'):
                 self.update()
-        previous = list(self.target.parent.glob('.kirk-update-*/previous.app/Contents/MacOS/KirkScreenshot'))
+        previous = list(self.target.parent.glob('.screenshot-update-*/previous.app/Contents/MacOS/Screenshot'))
         self.assertEqual(len(previous), 1)
         self.assertEqual(previous[0].read_text(), 'old')
         self.assertEqual(len(list(self.backups.glob('*.zip'))), 1)
@@ -112,7 +112,7 @@ class InstallTests(unittest.TestCase):
         self.assertFalse(legacy.exists())
         self.assertEqual(self.binary().read_text(), 'new')
         with zipfile.ZipFile(backup) as archive:
-            self.assertEqual(archive.read(f'{legacy.name}/Contents/MacOS/KirkScreenshot'), b'old')
+            self.assertEqual(archive.read(f'{legacy.name}/Contents/MacOS/Screenshot'), b'old')
 
     def test_rename_failure_restores_old_name(self):
         legacy = self.target.with_name(dev.LEGACY_NAME)
@@ -126,12 +126,30 @@ class InstallTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 dev.install(self.source, self.target, self.backups, validate_app=lambda _: None, stop=lambda: None, previous_target=legacy)
         self.assertFalse(self.target.exists())
-        self.assertEqual((legacy / 'Contents/MacOS/KirkScreenshot').read_text(), 'old')
+        self.assertEqual((legacy / 'Contents/MacOS/Screenshot').read_text(), 'old')
 
     def test_refuses_other_app_identity(self):
         (self.target / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'other.screenshot'}))
         with self.assertRaisesRegex(RuntimeError, '其他应用'):
             dev.owned_install(self.target)
+
+    def test_same_name_system_app_is_not_ours(self):
+        apple = self.root / 'System/Applications/Utilities/Screenshot.app'
+        (apple / 'Contents/MacOS').mkdir(parents=True)
+        (apple / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.apple.screencaptureui', 'CFBundleExecutable': 'Screenshot'}))
+        self.assertFalse(dev.is_our_process(str(apple / 'Contents/MacOS/Screenshot')))
+        self.assertTrue(dev.is_our_process(str(self.target / 'Contents/MacOS/Screenshot')))
+
+    def test_legacy_executable_backup(self):
+        legacy = self.target.with_name(dev.LEGACY_NAME)
+        self.target.rename(legacy)
+        (legacy / 'Contents/MacOS/Screenshot').rename(legacy / 'Contents/MacOS/KirkScreenshot')
+        (legacy / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.kirktools.screenshot', 'CFBundleExecutable': 'KirkScreenshot'}))
+        self.assertTrue(dev.is_our_process(str(legacy / 'Contents/MacOS/KirkScreenshot')))
+        backup = dev.install(self.source, self.target, self.backups, validate_app=lambda _: None, stop=lambda: None, previous_target=legacy)
+        with zipfile.ZipFile(backup) as archive:
+            self.assertEqual(archive.read(f'{legacy.name}/Contents/MacOS/KirkScreenshot'), b'old')
+        self.assertEqual(self.binary().read_text(), 'new')
 
     def test_first_install(self):
         import shutil

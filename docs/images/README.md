@@ -1,16 +1,16 @@
 # 文档素材
 
-- `editor.png`：实际 AppKit 原位编辑画面与工具栏，内容由内置示例生成。
-- `scrolling.gif` / `scroll-preview.png`：真实滚动采集测试中记录的预览控件。
-- `scroll-result.png`：同一测试实际采集、拼接的 PNG，与生成参考逐行逐列比较通过后才导出。
+- `editor.png`：AppKit 原位编辑画面与工具栏，使用内置示例内容。
+- `scrolling.gif` / `scroll-preview.png`：合成滚动帧驱动的实际预览控件。
+- `scroll-result.png`：同一离线演示拼接的 PNG，与生成参考逐像素比较通过后才导出。
 
-不包含私人聊天或桌面背景。重新生成（先构建应用；第二项需要已有录屏权限，会短暂显示测试窗口）：
+素材不包含私人聊天或桌面背景，也不读取屏幕。重新生成（先构建应用）：
 
 ```bash
-KIRK_DOCUMENTATION_DIR="$PWD/docs/images" \
-  'dist/Kirk Screenshot.app/Contents/MacOS/KirkScreenshot' --overlay-demo
-KIRK_DOCUMENTATION_DIR="$PWD/docs/images" KIRK_SCROLL_FIXTURE_STYLE=showcase \
-  scripts/test-live-scroll.sh
+SCREENSHOT_DOCUMENTATION_DIR="$PWD/docs/images" \
+  'dist/Screenshot.app/Contents/MacOS/Screenshot' --overlay-demo
+SCREENSHOT_DOCUMENTATION_DIR="$PWD/docs/images" \
+  'dist/Screenshot.app/Contents/MacOS/Screenshot' --documentation-scroll-demo
 ```
 
-视频暂未提供。请在修改相关界面后更新素材。
+这些素材展示界面和拼接流程，不代表真实应用滚动兼容性验证。真实桌面采集仍需按验收文档测试。修改相关界面后请同步更新素材。

@@ -15,3 +15,8 @@ dev:
 
 dev-test:
 	@python3 scripts/test-install-dev.py
+
+# 检查待公开内容，不暂存、不提交。
+public-check:
+	@python3 scripts/test-public-content.py
+	@python3 scripts/check-public-content.py

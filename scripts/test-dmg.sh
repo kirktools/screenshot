@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 version=$(tr -d '\r\n' < VERSION)
-image="$PWD/dist/Kirk-Screenshot-$version-macOS.dmg"
+image="$PWD/dist/Screenshot-$version-macOS.dmg"
 mkdir -p .build
 mountpoint=$(mktemp -d "$PWD/.build/dmg-mount.XXXXXX")
 mounted=0
@@ -20,5 +20,5 @@ mounted=1
 [[ "$(find "$mountpoint" -mindepth 1 -maxdepth 1 ! -name '.*' | wc -l | tr -d ' ')" == 2 ]] || { echo "DMG 包含额外文件。" >&2; exit 1; }
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$mountpoint/Screenshot.app/Contents/Info.plist")" == "$version" ]] || { echo "DMG 应用版本不一致。" >&2; exit 1; }
 codesign --verify --deep --strict "$mountpoint/Screenshot.app"
-cmp "$mountpoint/Screenshot.app/Contents/MacOS/KirkScreenshot" 'dist/Screenshot.app/Contents/MacOS/KirkScreenshot'
+cmp "$mountpoint/Screenshot.app/Contents/MacOS/Screenshot" 'dist/Screenshot.app/Contents/MacOS/Screenshot'
 echo 'DMG 验证通过：应用、Applications 安装入口、版本、签名与二进制一致。'

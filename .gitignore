@@ -3,3 +3,24 @@ dist/
 .DS_Store
 *.xcuserstate
 .swiftpm/
+
+# 个人验收、排障、审计报告及机器专用配置仅留本地。
+.local/
+.gstack/security-reports/
+docs/VALIDATION.md
+.env
+.env.*
+!.env.example
+!.env.*.example
+!.env.sample
+*.local.json
+*.local.toml
+*.p12
+*.pfx
+*.pem
+*.key
+*.mobileprovision
+
+# Python 检查脚本缓存。
+__pycache__/
+*.py[cod]

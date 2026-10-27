@@ -12,7 +12,7 @@ SOURCE = Path(__file__).resolve().parent
 
 class ReleaseTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix='kirk-release-')
+        self.temporary = tempfile.TemporaryDirectory(prefix='screenshot-release-')
         self.addCleanup(self.temporary.cleanup)
         root = Path(self.temporary.name)
         self.local, self.remote = root / 'local', root / 'remote.git'

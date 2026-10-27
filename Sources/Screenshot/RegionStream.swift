@@ -26,7 +26,7 @@ private final class StreamGate: @unchecked Sendable {
 @MainActor final class MacRegionStream: NSObject, RegionFrameStream, SCStreamOutput, SCStreamDelegate {
     let frames: AsyncThrowingStream<CapturedFrame, Error>
     private let continuation: AsyncThrowingStream<CapturedFrame, Error>.Continuation
-    private let queue = DispatchQueue(label: "tools.kirk.screenshot.capture", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "com.kirktools.screenshot.capture", qos: .userInitiated)
     private let gate = StreamGate()
     private var stopTask: Task<Void, Never>?
     private var stream: SCStream?

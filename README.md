@@ -22,7 +22,7 @@
 
 长图界面只保留预览和图标，出错才显示悬浮提示。撤销、重试、放大等操作在「…」里。
 
-<img src="docs/images/scrolling.gif" alt="连续滚动时的真实长截图预览演示" width="250"> <img src="docs/images/scroll-result.png" alt="通过实际连续滚动采集与拼接生成的长图示例" width="350">
+<img src="docs/images/scrolling.gif" alt="合成滚动帧驱动的原生长截图预览" width="250"> <img src="docs/images/scroll-result.png" alt="通过合成帧拼接并逐像素验证的长图示例" width="350">
 
 <sub>界面由真实原生控件渲染；示例内容为生成素材，不含私人聊天。</sub>
 
@@ -48,7 +48,7 @@ make dev
 
 ## 文档与贡献
 
-[使用与排障](docs/USAGE.md) · [架构](docs/ARCHITECTURE.md) · [测试验收](docs/ACCEPTANCE.md) · [CI 与发布](docs/RELEASING.md)
+[使用与排障](docs/USAGE.md) · [隐私说明](docs/PRIVACY.md) · [安全报告](SECURITY.md) · [贡献指南](CONTRIBUTING.md) · [架构](docs/ARCHITECTURE.md) · [测试验收](docs/ACCEPTANCE.md) · [CI 与发布](docs/RELEASING.md)
 
 欢迎 Issue 和 PR：请附系统版本、芯片与复现步骤，图片使用非敏感示例。修改算法请补测试，修改界面请附截图。
 

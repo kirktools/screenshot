@@ -4,6 +4,7 @@ import StitchCore
 
 /// 不读取桌面、不申请权限：验证平台渲染、拼接方向和实际导出像素。
 @MainActor func runSelfTest() throws {
+    guard localized("capture.normal") != "capture.normal" else { throw CaptureError.message("运行位置的语言资源未加载") }
     try runSelectionSelfTest()
     try runPermissionFlowSelfTest()
     try runUpdateSelfTest()
@@ -53,7 +54,7 @@ import StitchCore
     let overlay = EditorController(image: a, region: selection, allowScroll: true)
     overlay.showWindow(nil)
     try require(overlay.diagnosticGeometry.image == selection, "普通截图没有保留原选区位置")
-    if let directory = ProcessInfo.processInfo.environment["KIRK_SELFTEST_DIR"],
+    if let directory = ProcessInfo.processInfo.environment["SCREENSHOT_SELFTEST_DIR"],
        let view = overlay.diagnosticToolbarViews.first,
        let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
         view.cacheDisplay(in: view.bounds, to: bitmap)
@@ -103,12 +104,12 @@ import StitchCore
     let negativeScreen = CGRect(x: -1600, y: -200, width: 1600, height: 1000)
     let placement = CaptureLayout.toolbar(near: CGRect(x: -900, y: 300, width: 600, height: 300), size: CGSize(width: 600, height: 50), within: negativeScreen)
     try require(negativeScreen.contains(placement) && placement.maxY < 300, "负坐标屏幕工具栏定位错误")
-    let path = ProcessInfo.processInfo.environment["KIRK_SELFTEST_DIR"] ?? NSTemporaryDirectory()
-    let output = URL(fileURLWithPath: path).appendingPathComponent("kirk-selftest.png")
+    let path = ProcessInfo.processInfo.environment["SCREENSHOT_SELFTEST_DIR"] ?? NSTemporaryDirectory()
+    let output = URL(fileURLWithPath: path).appendingPathComponent("screenshot-selftest.png")
     try png.write(to: output, options: .atomic)
     try require(FileManager.default.fileExists(atPath: output.path), "PNG 写入失败")
     // 显式启用时才修改真实剪贴板，避免 CI 或普通自测覆盖用户内容。
-    if ProcessInfo.processInfo.environment["KIRK_TEST_CLIPBOARD"] == "1" {
+    if ProcessInfo.processInfo.environment["SCREENSHOT_TEST_CLIPBOARD"] == "1" {
         let pb = NSPasteboard.general
         let saved = (pb.pasteboardItems ?? []).map { item in
             let copy = NSPasteboardItem()
@@ -161,7 +162,7 @@ import StitchCore
     let image = try await provider.capture(rect)
     let scale = screen.backingScaleFactor
     guard image.width == Int(160 * scale), image.height == Int(120 * scale) else { throw CaptureError.message("Retina 截图尺寸不符合预期") }
-    let directory = ProcessInfo.processInfo.environment["KIRK_SELFTEST_DIR"] ?? NSTemporaryDirectory()
+    let directory = ProcessInfo.processInfo.environment["SCREENSHOT_SELFTEST_DIR"] ?? NSTemporaryDirectory()
     let path = URL(fileURLWithPath: directory).appendingPathComponent("desktop-smoke.png")
     try image.png().write(to: path, options: .atomic)
     for _ in 0..<3 {

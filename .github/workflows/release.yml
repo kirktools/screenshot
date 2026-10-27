@@ -20,6 +20,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: 公开内容与隐私防回归
+        run: |
+          python3 scripts/test-public-content.py
+          python3 scripts/check-public-content.py
       - name: 检查 Xcode 与 Swift 工具链
         run: |
           test -d "$DEVELOPER_DIR"
@@ -46,11 +50,11 @@ jobs:
           BUILD_NUMBER: ${{ github.run_number }}
         run: |
           scripts/build-app.sh
-          lipo 'dist/Screenshot.app/Contents/MacOS/KirkScreenshot' -verify_arch arm64
-          lipo 'dist/Screenshot.app/Contents/MacOS/KirkScreenshot' -verify_arch x86_64
-          'dist/Screenshot.app/Contents/MacOS/KirkScreenshot' --self-test
-          'dist/Screenshot.app/Contents/MacOS/KirkScreenshot' --update-network-self-test
-          'dist/Screenshot.app/Contents/MacOS/KirkScreenshot' --scroll-session-self-test
+          lipo 'dist/Screenshot.app/Contents/MacOS/Screenshot' -verify_arch arm64
+          lipo 'dist/Screenshot.app/Contents/MacOS/Screenshot' -verify_arch x86_64
+          'dist/Screenshot.app/Contents/MacOS/Screenshot' --self-test
+          'dist/Screenshot.app/Contents/MacOS/Screenshot' --update-network-self-test
+          'dist/Screenshot.app/Contents/MacOS/Screenshot' --scroll-session-self-test
           scripts/test-dmg.sh
           shasum -a 256 dist/*.zip dist/*.dmg > dist/SHA256SUMS.txt
       - name: ZIP 安装版资源与启动回归

@@ -53,7 +53,7 @@ import UniformTypeIdentifiers
                            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
                            provider: CGDataProvider(data: Data(pixels) as CFData)!, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
     func image(_ offset: Int) -> CGImage { document.cropping(to: CGRect(x: 0, y: offset, width: width, height: 240))! }
-    let clipboard = NSPasteboard(name: .init("Kirk-Scroll-Test-" + UUID().uuidString))
+    let clipboard = NSPasteboard(name: .init("Screenshot-Scroll-Test-" + UUID().uuidString))
     defer { clipboard.releaseGlobally() }
     let region = CGRect(x: 100, y: 100, width: 128, height: 240)
     let provider = FixtureProvider()
@@ -84,7 +84,7 @@ import UniformTypeIdentifiers
     try require(session.diagnosticPanelSize.height < 310, "正常状态仍占用大段文字空间")
     let buttons = session.diagnosticControls.compactMap { $0 as? NSButton }
     try require(buttons.count == 5 && buttons.allSatisfy { $0.image != nil && $0.toolTip != nil }, "主操作未精简为带说明的图标")
-    if let directory = ProcessInfo.processInfo.environment["KIRK_SELFTEST_DIR"],
+    if let directory = ProcessInfo.processInfo.environment["SCREENSHOT_SELFTEST_DIR"],
        let view = session.diagnosticControls.first,
        let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
         view.cacheDisplay(in: view.bounds, to: bitmap)
@@ -112,7 +112,7 @@ import UniformTypeIdentifiers
         return Data(bytes: ctx.data!, count: image.width * image.height * 4)
     }
     try require(rgba(output) == rgba(expected), "连续合成存在错行、漏行或颜色变化")
-    let directory = ProcessInfo.processInfo.environment["KIRK_SELFTEST_DIR"] ?? NSTemporaryDirectory()
+    let directory = ProcessInfo.processInfo.environment["SCREENSHOT_SELFTEST_DIR"] ?? NSTemporaryDirectory()
     try output.png().write(to: URL(fileURLWithPath: directory).appendingPathComponent("continuous-scroll.png"), options: .atomic)
 
     let otherProvider = FixtureProvider()
@@ -207,10 +207,10 @@ import UniformTypeIdentifiers
 /// 真正经过窗口合成器和 SCStream 的集成测试。独立测试进程绘制并连续滚动，不读取用户聊天。
 @MainActor func runLiveScrollSelfTest() async throws {
     guard CGPreflightScreenCaptureAccess() else { throw CaptureError.message("真实滚动测试需要已有录屏授权；未申请或修改权限") }
-    guard let executable = ProcessInfo.processInfo.environment["KIRK_SCROLL_FIXTURE_EXEC"] else {
+    guard let executable = ProcessInfo.processInfo.environment["SCREENSHOT_SCROLL_FIXTURE_EXEC"] else {
         throw CaptureError.message("请通过 scripts/test-live-scroll.sh 运行")
     }
-    let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("kirk-scroll-test-" + UUID().uuidString)
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("screenshot-scroll-test-" + UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable); process.arguments = [directory.path]
@@ -239,7 +239,7 @@ import UniformTypeIdentifiers
     let firstCapture = try await provider.capture(rect)
     let initialError = StitchMatcher().difference(firstCapture.grayFrame(), firstExpected.grayFrame())
     guard initialError < 1 else { throw CaptureError.message("测试窗口首帧与参考不符（可能遮挡或尚未显示），亮度误差 \(initialError)") }
-    let clipboard = NSPasteboard(name: .init("Kirk-Live-Test-" + UUID().uuidString))
+    let clipboard = NSPasteboard(name: .init("Screenshot-Live-Test-" + UUID().uuidString))
     defer { clipboard.releaseGlobally() }
     let session = ScrollSession(provider: provider, region: rect, hotkeys: HotkeyRegistry(), clipboard: clipboard)
     var complete = false, result: CGImage?
@@ -247,7 +247,7 @@ import UniformTypeIdentifiers
     defer { session.cancelCapture() }
     _ = session.start(registerHotkeys: false, showPanel: true)
     try await wait { session.diagnosticSnapshot.count > 0 }
-    if ProcessInfo.processInfo.environment["KIRK_DOCUMENTATION_DIR"] != nil {
+    if ProcessInfo.processInfo.environment["SCREENSHOT_DOCUMENTATION_DIR"] != nil {
         recordDocumentationFrame = {
             let now = ProcessInfo.processInfo.systemUptime
             guard now - lastDocumentationFrame >= 0.15, documentationFrames.count < 64,
@@ -266,7 +266,7 @@ import UniformTypeIdentifiers
     }
     guard !session.diagnosticSnapshot.paused else { throw CaptureError.message("真实滚动发生暂停：\(session.diagnosticSnapshot)，\(session.diagnosticControls.compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: " / "))") }
     var documentationPreview: Data?
-    if ProcessInfo.processInfo.environment["KIRK_DOCUMENTATION_DIR"] != nil,
+    if ProcessInfo.processInfo.environment["SCREENSHOT_DOCUMENTATION_DIR"] != nil,
        let view = session.diagnosticControls.first,
        let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
         view.cacheDisplay(in: view.bounds, to: bitmap)
@@ -294,7 +294,7 @@ import UniformTypeIdentifiers
     guard worstRow < 1, worstColumn < 1 else { throw CaptureError.message("真实输出含错行或边框污染：row=\(worstRow), column=\(worstColumn)") }
     guard difference < 1 else { throw CaptureError.message("真实屏幕输出与原始测试页面不一致：亮度误差 \(difference)") }
     // 文档素材仅在输出与生成参考完全一致后写出，避免把遮挡内容带进仓库。
-    if let directory = ProcessInfo.processInfo.environment["KIRK_DOCUMENTATION_DIR"] {
+    if let directory = ProcessInfo.processInfo.environment["SCREENSHOT_DOCUMENTATION_DIR"] {
         guard difference == 0, let documentationPreview else { throw CaptureError.message("文档素材与参考不完全一致，未导出") }
         try documentationPreview.write(to: URL(fileURLWithPath: directory).appendingPathComponent("scroll-preview.png"), options: .atomic)
         try result.png().write(to: URL(fileURLWithPath: directory).appendingPathComponent("scroll-result.png"), options: .atomic)
@@ -310,4 +310,53 @@ import UniformTypeIdentifiers
         }
     }
     print("LIVE SCROLL PASSED: SCStream + native scrolling window, \(result.width)x\(result.height), mean luminance error=\(difference)")
+}
+
+/// 用生成页面驱动真实会话和原生控件，离线更新文档素材，不读取屏幕。
+@MainActor func writeDocumentationScroll(to directory: URL) async throws {
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let document = makeDemoImage(), height = min(600, document.height), end = min(900, document.height - height)
+    let provider = FixtureProvider(), board = NSPasteboard(name: .init("Screenshot-Documentation-" + UUID().uuidString))
+    defer { board.releaseGlobally() }
+    let session = ScrollSession(provider: provider, region: CGRect(x: 0, y: 0, width: document.width, height: height), hotkeys: HotkeyRegistry(), clipboard: board)
+    defer { session.cancelCapture() }
+    var done = false, output: CGImage?, frames: [CGImage] = []
+    session.completion = { image, _ in output = image; done = true }
+    guard session.start(registerHotkeys: false, showPanel: false) else { throw CaptureError.message("文档演示无法启动") }
+    try await Task.sleep(for: .milliseconds(50))
+    func wait(_ condition: () -> Bool) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 4
+        while !condition() {
+            guard ProcessInfo.processInfo.systemUptime < deadline else { throw CaptureError.message("文档演示等待超时") }
+            try await Task.sleep(for: .milliseconds(15))
+        }
+    }
+    for offset in stride(from: 0, through: end, by: 30) {
+        let before = session.diagnosticSnapshot.count
+        provider.source.send(document.cropping(to: CGRect(x: 0, y: offset, width: document.width, height: height))!)
+        try await wait { session.diagnosticSnapshot.count > before }
+        try await Task.sleep(for: .milliseconds(160))
+        if let view = session.diagnosticControls.first, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            if let frame = bitmap.cgImage { frames.append(frame) }
+        }
+    }
+    session.finishCapture(); try await wait { done }
+    guard let output, output.height == height + end, let last = frames.last else { throw CaptureError.message("文档演示输出不完整") }
+    let expected = document.cropping(to: CGRect(x: 0, y: 0, width: document.width, height: height + end))!
+    func rgba(_ image: CGImage) -> Data {
+        let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return Data(bytes: ctx.data!, count: image.width * image.height * 4)
+    }
+    guard rgba(output) == rgba(expected) else { throw CaptureError.message("文档演示与生成参考不一致，未导出") }
+    try output.png().write(to: directory.appendingPathComponent("scroll-result.png"), options: .atomic)
+    try last.png().write(to: directory.appendingPathComponent("scroll-preview.png"), options: .atomic)
+    guard let gif = CGImageDestinationCreateWithURL(directory.appendingPathComponent("scrolling.gif") as CFURL, UTType.gif.identifier as CFString, frames.count, nil) else { throw CaptureError.message("无法创建文档 GIF") }
+    CGImageDestinationSetProperties(gif, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+    for (i, frame) in frames.enumerated() {
+        CGImageDestinationAddImage(gif, frame, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: i == frames.count - 1 ? 1.5 : 0.15]] as CFDictionary)
+    }
+    guard CGImageDestinationFinalize(gif) else { throw CaptureError.message("文档 GIF 写入失败") }
+    print("离线文档素材通过：原生控件、合成滚动帧及逐像素结果验证；未读取桌面。")
 }

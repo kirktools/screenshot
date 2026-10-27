@@ -19,7 +19,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         let screen = NSScreen.screens.first!
         let viewportWidth = min(756.0, screen.visibleFrame.width - 80)
-        let requestedHeight = Double(ProcessInfo.processInfo.environment["KIRK_SCROLL_FIXTURE_HEIGHT"] ?? "450") ?? 450
+        let requestedHeight = Double(ProcessInfo.processInfo.environment["SCREENSHOT_SCROLL_FIXTURE_HEIGHT"] ?? "450") ?? 450
         let viewportHeight = min(max(100, requestedHeight), screen.visibleFrame.height - 80)
         let scale = screen.backingScaleFactor, width = Int(viewportWidth * scale), height = Int(2000 * scale)
         var pixels = [UInt8](repeating: 255, count: width * height * 4)
@@ -34,8 +34,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
         var cg = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
                          space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
                          provider: CGDataProvider(data: Data(pixels) as CFData)!, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
-        let showcase = ProcessInfo.processInfo.environment["KIRK_SCROLL_FIXTURE_STYLE"] == "showcase"
-        if showcase || ProcessInfo.processInfo.environment["KIRK_SCROLL_FIXTURE_STYLE"] == "dark-text" {
+        let showcase = ProcessInfo.processInfo.environment["SCREENSHOT_SCROLL_FIXTURE_STYLE"] == "showcase"
+        if showcase || ProcessInfo.processInfo.environment["SCREENSHOT_SCROLL_FIXTURE_STYLE"] == "dark-text" {
             let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
                                 space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
             ctx.setFillColor(CGColor(gray: 0.09, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
@@ -59,7 +59,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         try! bitmap.representation(using: .png, properties: [:])!.write(to: directory.appendingPathComponent("reference.png"))
         window = NSWindow(contentRect: CGRect(x: screen.visibleFrame.minX + 40, y: screen.visibleFrame.minY + 40, width: viewportWidth, height: viewportHeight),
                           styleMask: [.borderless], backing: .buffered, defer: false)
-        window.title = "Kirk 连续滚动测试页面"; window.isReleasedWhenClosed = false
+        window.title = "Screenshot 连续滚动测试页面"; window.isReleasedWhenClosed = false
         window.level = .floating; window.hasShadow = false
         let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: viewportWidth, height: viewportHeight))
         scroll.borderType = .noBorder; scroll.hasVerticalScroller = false; scroll.hasHorizontalScroller = false
@@ -73,7 +73,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         try! JSONSerialization.data(withJSONObject: info).write(to: directory.appendingPathComponent("ready.json"), options: .atomic)
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
             guard let self, FileManager.default.fileExists(atPath: self.directory.appendingPathComponent("go").path), self.position < 300 else { return }
-            self.position = min(300, self.position + (ProcessInfo.processInfo.environment["KIRK_SCROLL_FIXTURE_STYLE"] != nil ? 2.35 : 5))
+            self.position = min(300, self.position + (ProcessInfo.processInfo.environment["SCREENSHOT_SCROLL_FIXTURE_STYLE"] != nil ? 2.35 : 5))
             scroll.contentView.scroll(to: CGPoint(x: 0, y: self.position)); scroll.reflectScrolledClipView(scroll.contentView)
             scroll.displayIfNeeded()
             let progress: [String: Double] = ["position": self.position, "origin": scroll.contentView.bounds.origin.y]

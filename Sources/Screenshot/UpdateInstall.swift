@@ -21,7 +21,8 @@ struct UpdateBundle {
         let data = try Data(contentsOf: infoURL)
         guard let info = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
               info["CFBundleIdentifier"] as? String == "com.kirktools.screenshot",
-              info["CFBundleExecutable"] as? String == "KirkScreenshot",
+              let executableName = info["CFBundleExecutable"] as? String,
+              ["Screenshot", "KirkScreenshot"].contains(executableName),
               let versionText = info["CFBundleShortVersionString"] as? String else { throw UpdateError("更新应用的标识或版本信息无效。") }
         let version = try ReleaseVersion(versionText)
         let minimum = info["LSMinimumSystemVersion"] as? String ?? "14.0"
@@ -32,14 +33,14 @@ struct UpdateBundle {
         #else
         let architecture = "x86_64"
         #endif
-        guard try supportsArchitecture(app.appendingPathComponent("Contents/MacOS/KirkScreenshot"), cpu: architecture == "arm64" ? 0x0100000c : 0x01000007) else { throw UpdateError("更新应用不包含当前芯片架构。") }
+        guard try supportsArchitecture(app.appendingPathComponent("Contents/MacOS/" + executableName), cpu: architecture == "arm64" ? 0x0100000c : 0x01000007) else { throw UpdateError("更新应用不包含当前芯片架构。") }
 
         var code: SecStaticCode?, signing: CFDictionary?
         guard SecStaticCodeCreateWithPath(app as CFURL, SecCSFlags(), &code) == errSecSuccess, let code,
               SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &signing) == errSecSuccess else { throw UpdateError("无法读取更新应用的签名身份。") }
         let team = (signing as? [String: Any])?[kSecCodeInfoTeamIdentifier as String] as? String
-        let resources = app.appendingPathComponent("Contents/Resources/KirkScreenshot_KirkScreenshot.bundle")
-        guard fm.fileExists(atPath: resources.path) else { throw UpdateError("更新应用缺少语言资源包。") }
+        let hasResources = ["Screenshot_Screenshot.bundle", "KirkScreenshot_KirkScreenshot.bundle"].contains { fm.fileExists(atPath: app.appendingPathComponent("Contents/Resources/" + $0).path) }
+        guard hasResources else { throw UpdateError("更新应用缺少语言资源包。") }
         return UpdateBundle(version: version, minimumOS: minimumOS, team: team)
     }
     /// 直接读取 Mach-O 头；发行应用不能依赖需安装 Xcode/CLT 的 lipo。
@@ -94,7 +95,9 @@ struct PreparedUpdate {
         let helper = root.appendingPathComponent("UpdateInstaller")
         try? FileManager.default.removeItem(at: helper)
         try? FileManager.default.removeItem(at: root.appendingPathComponent("ready.txt"))
-        try FileManager.default.copyItem(at: currentApp.appendingPathComponent("Contents/MacOS/KirkScreenshot"), to: helper)
+        guard let executable = Bundle.main.executableURL,
+              executable.deletingLastPathComponent().standardizedFileURL.path == currentApp.appendingPathComponent("Contents/MacOS").path else { throw UpdateError("当前应用可执行文件位置无效。") }
+        try FileManager.default.copyItem(at: executable, to: helper)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
         let manifest = UpdateManifest(parentPID: parent, app: app.path, version: version.description, team: team, installedApp: currentApp.path)
         let file = root.appendingPathComponent("manifest.json")
@@ -136,7 +139,7 @@ enum UpdateInstaller {
         let fm = FileManager.default
         let previous = previousDestination ?? destination
         guard previous.path == destination.path || !fm.fileExists(atPath: destination.path) else { throw UpdateError("新旧应用同时存在，停止更新。") }
-        let staging = destination.deletingLastPathComponent().appendingPathComponent(".kirk-update-\(UUID().uuidString)")
+        let staging = destination.deletingLastPathComponent().appendingPathComponent(".screenshot-update-\(UUID().uuidString)")
         try fm.createDirectory(at: staging, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         let newApp = staging.appendingPathComponent("Screenshot.app"), oldApp = staging.appendingPathComponent("previous.app")
         var preserve = false
@@ -145,7 +148,7 @@ enum UpdateInstaller {
         try validate(newApp)
         guard fm.fileExists(atPath: previous.path) else { throw UpdateError("原应用已移动或移除，停止更新。") }
         try fm.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
-        let backup = backupDirectory.appendingPathComponent("Kirk-Screenshot-\(UUID().uuidString).zip")
+        let backup = backupDirectory.appendingPathComponent("Screenshot-\(UUID().uuidString).zip")
         _ = try UpdateCommand.run("/usr/bin/ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", previous.path, backup.path])
         try move(previous, oldApp)
         do { try move(newApp, destination) }
@@ -168,6 +171,7 @@ enum UpdateInstaller {
             let manifest = try JSONDecoder().decode(UpdateManifest.self, from: data)
             guard manifest.parentPID > 1, UpdatePaths.isInstalledPath(URL(fileURLWithPath: manifest.installedApp)), ["Screenshot.app", "Kirk Screenshot.app"].contains(where: { URL(fileURLWithPath: manifest.app).standardizedFileURL.path == root.appendingPathComponent("extracted/" + $0).path }) else { throw UpdateError("更新任务路径无效。") }
             originalURL = URL(fileURLWithPath: manifest.installedApp).standardizedFileURL
+            // 与旧版安装器共用锁名，避免升级时并发替换应用。
             let lock = fm.temporaryDirectory.appendingPathComponent("kirk-screenshot-dev-install.lock")
             let descriptor = open(lock.path, O_CREAT | O_RDWR, 0o600)
             guard descriptor >= 0 else { throw UpdateError("无法创建安装互斥锁。") }

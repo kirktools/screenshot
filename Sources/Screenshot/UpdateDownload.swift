@@ -5,7 +5,7 @@ import Darwin
 /// 所有外部命令使用参数数组；不读取令牌、不启动 shell、不自动执行 gh auth login。
 enum UpdateCommand {
     static func run(_ executable: String, _ arguments: [String], maximumOutput: Int = 1024 * 1024) throws -> Data {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("kirk-command-\(UUID().uuidString)")
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("screenshot-command-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let output = folder.appendingPathComponent("output")
@@ -70,7 +70,7 @@ actor UpdateDownload {
     }
     private func request(_ url: URL) -> URLRequest {
         var request = URLRequest(url: url)
-        request.setValue("Kirk-Screenshot-Updater", forHTTPHeaderField: "User-Agent")
+        request.setValue("Screenshot-Updater", forHTTPHeaderField: "User-Agent")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         return request

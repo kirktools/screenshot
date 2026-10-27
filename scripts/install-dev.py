@@ -21,17 +21,43 @@ def run(args):
     return subprocess.run([str(a) for a in args], check=True)
 
 
+def executable_name(app):
+    with (Path(app) / 'Contents/Info.plist').open('rb') as handle:
+        info = plistlib.load(handle)
+    name = info.get('CFBundleExecutable')
+    if info.get('CFBundleIdentifier') != 'com.kirktools.screenshot' or name not in ['Screenshot', 'KirkScreenshot']:
+        raise RuntimeError(f'不是本项目的有效应用：{app}')
+    return name
+
+
 def validate(app):
     run(['codesign', '--verify', '--deep', '--strict', app])
-    run([app / 'Contents/MacOS/KirkScreenshot', '--packaged-resources-test'])
+    run([app / 'Contents/MacOS' / executable_name(app), '--packaged-resources-test'])
+
+
+def is_our_process(executable):
+    path = Path(executable)
+    for parent in path.parents:
+        if parent.suffix == '.app':
+            try:
+                return path.name == executable_name(parent)
+            except (OSError, ValueError, RuntimeError):
+                return False
+    return path.name in ['Screenshot', 'KirkScreenshot'] and ROOT.resolve() in path.resolve().parents and '.build' in path.parts
 
 
 def stop_instances():
-    result = subprocess.run(['pgrep', '-x', 'KirkScreenshot'], capture_output=True, text=True)
+    candidates = set()
+    for name in ['Screenshot', 'KirkScreenshot']:
+        result = subprocess.run(['pgrep', '-x', name], capture_output=True, text=True)
+        candidates.update(result.stdout.split())
     pids = []
-    for raw in result.stdout.split():
+    for raw in sorted(candidates):
         owner = subprocess.run(['ps', '-p', raw, '-o', 'uid='], capture_output=True, text=True).stdout.strip()
         if owner != str(os.getuid()):
+            continue
+        executable = subprocess.run(['ps', '-p', raw, '-o', 'comm='], capture_output=True, text=True).stdout.strip()
+        if not is_our_process(executable):
             continue
         pid = int(raw)
         try:
@@ -71,7 +97,7 @@ def install(source, target, backups, validate_app=None, stop=None, previous_targ
         raise RuntimeError(f'缺少构建产物：{source}')
     target.parent.mkdir(parents=True, exist_ok=True)
     backup = None
-    stage_root = Path(tempfile.mkdtemp(prefix='.kirk-update-', dir=target.parent))
+    stage_root = Path(tempfile.mkdtemp(prefix='.screenshot-update-', dir=target.parent))
     preserve_previous = False
     try:
         staged = stage_root / target.name
@@ -80,10 +106,10 @@ def install(source, target, backups, validate_app=None, stop=None, previous_targ
         if previous.exists():
             backups.mkdir(parents=True, exist_ok=True)
             stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f')
-            backup = backups / f'Kirk-Screenshot-{stamp}.zip'
+            backup = backups / f'Screenshot-{stamp}.zip'
             run(['ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', previous, backup])
             with zipfile.ZipFile(backup) as archive:
-                if archive.testzip() is not None or f'{previous.name}/Contents/MacOS/KirkScreenshot' not in archive.namelist():
+                if archive.testzip() is not None or f'{previous.name}/Contents/MacOS/{executable_name(previous)}' not in archive.namelist():
                     raise RuntimeError('旧版备份校验失败，未替换应用。')
         stop()
         rollback = stage_root / 'previous.app'
@@ -108,6 +134,7 @@ def install(source, target, backups, validate_app=None, stop=None, previous_targ
 
 def main():
     # 用户级临时目录中的跨仓库互斥，避免两个 worktree 同时替换固定应用。
+    # 与旧版安装器共用锁名，避免升级时两个版本并发替换应用。
     lock = Path(tempfile.gettempdir()) / 'kirk-screenshot-dev-install.lock'
     with lock.open('a') as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)

@@ -222,7 +222,7 @@ struct EditState {
         commitText()
         let panel = NSSavePanel(); panel.allowedContentTypes = [.png]
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 3)
-        panel.nameFieldStringValue = "Kirk-\(Date.now.formatted(.iso8601).replacingOccurrences(of: ":", with: "-" )).png"
+        panel.nameFieldStringValue = "Screenshot-\(Date.now.formatted(.iso8601).replacingOccurrences(of: ":", with: "-" )).png"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             guard let output = render(state) else { throw CaptureError.message("无法渲染图片") }

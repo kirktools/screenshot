@@ -15,7 +15,7 @@ trap 'rm -rf "$staging"' EXIT
 # 使用独立副本，避免为创建镜像改动已签名的应用或混入 dist 中的旧产物。
 ditto "$app" "$staging/Screenshot.app"
 ln -s /Applications "$staging/Applications"
-image="$PWD/dist/Kirk-Screenshot-$version-macOS.dmg"
+image="$PWD/dist/Screenshot-$version-macOS.dmg"
 hdiutil create -ov -format UDZO -fs HFS+ -volname 'Screenshot' -srcfolder "$staging" "$image"
 hdiutil verify "$image"
 echo "已生成安装镜像：$image"

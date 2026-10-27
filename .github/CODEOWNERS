@@ -1,0 +1,5 @@
+# 发布、工作流及更新器的变更由当前仓库维护者审阅。
+/.github/ @hanzebang
+/scripts/ @hanzebang
+/Sources/Screenshot/ReleaseUpdate.swift @hanzebang
+/Sources/Screenshot/Update*.swift @hanzebang

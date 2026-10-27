@@ -36,7 +36,8 @@ struct AppRelease: Decodable {
         let version = try self.version
         guard tag_name == "v\(version)" else { throw UpdateError("Release 标签不是标准 vX.Y.Z。") }
         guard version > current else { return nil }
-        let name = "Kirk-Screenshot-\(version)-macOS.zip"
+        let name = assets.contains(where: { $0.name == "Screenshot-\(version)-macOS.zip" })
+            ? "Screenshot-\(version)-macOS.zip" : "Kirk-Screenshot-\(version)-macOS.zip"
         func asset(_ name: String, limit: Int) throws -> ReleaseAsset {
             let matches = assets.filter { $0.name == name }
             guard matches.count == 1, let asset = matches.first, asset.id > 0, asset.size > 0, asset.size <= limit,
@@ -117,6 +118,6 @@ enum UpdateZipPolicy {
             guard total <= 512 * 1024 * 1024 else { throw UpdateError("更新解压内容超过 512 MB 限制。") }
             cursor = next
         }
-        guard cursor == end, appRoots.count == 1, let root = appRoots.first, paths.contains(root + "/contents/info.plist"), paths.contains(root + "/contents/macos/kirkscreenshot") else { throw UpdateError("更新 ZIP 缺少应用文件。") }
+        guard cursor == end, appRoots.count == 1, let root = appRoots.first, paths.contains(root + "/contents/info.plist"), (paths.contains(root + "/contents/macos/screenshot") || paths.contains(root + "/contents/macos/kirkscreenshot")) else { throw UpdateError("更新 ZIP 缺少应用文件。") }
     }
 }

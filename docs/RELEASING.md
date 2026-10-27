@@ -60,12 +60,12 @@ DMG 不绕过 Gatekeeper，也不代替 Developer ID 签名和公证。当前仍
 
 ```bash
 SIGN_IDENTITY='Developer ID Application: YOUR ENTITY (TEAMID)' UNIVERSAL=1 scripts/build-app.sh
-xcrun notarytool submit dist/Kirk-Screenshot-0.1.0-macOS.zip --keychain-profile YOUR_PROFILE --wait
+xcrun notarytool submit dist/Screenshot-0.1.0-macOS.zip --keychain-profile YOUR_PROFILE --wait
 xcrun stapler staple 'dist/Screenshot.app'
 xcrun stapler validate 'dist/Screenshot.app'
 spctl --assess --type execute --verbose 'dist/Screenshot.app'
 # staple 后重新压缩，再重新生成 checksum；不要分发 staple 前的旧 zip。
-ditto -c -k --sequesterRsrc --keepParent 'dist/Screenshot.app' dist/Kirk-Screenshot-0.1.0-macOS.zip
+ditto -c -k --sequesterRsrc --keepParent 'dist/Screenshot.app' dist/Screenshot-0.1.0-macOS.zip
 shasum -a 256 dist/*.zip > dist/SHA256SUMS.txt
 ```
 

@@ -5,10 +5,15 @@ import Carbon
 // 安装版必须显式使用包内资源，不能依赖开发机或 CI 的 .build 目录。
 enum AppLocalization {
     static let embeddedBundle: Bundle? = Bundle.main.resourceURL
-        .flatMap { Bundle(url: $0.appendingPathComponent("KirkScreenshot_KirkScreenshot.bundle")) }
+        .flatMap { Bundle(url: $0.appendingPathComponent("Screenshot_Screenshot.bundle")) }
     static var bundle: Bundle {
         if Bundle.main.bundleURL.pathExtension == "app" { return embeddedBundle ?? .main }
-        return .module
+        // SwiftPM 的生成访问器含绝对构建路径；命令行开发也只按运行位置寻找资源。
+        let name = "Screenshot_Screenshot.bundle"
+        let candidates = [Bundle.main.bundleURL.appendingPathComponent(name),
+                          Bundle.main.resourceURL?.appendingPathComponent(name),
+                          Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent(name)]
+        return candidates.compactMap { $0 }.compactMap { Bundle(url: $0) }.first ?? .main
     }
     static func verifyPackagedResources() throws {
         guard let bundle = embeddedBundle else { throw CaptureError.message("安装包缺少语言资源包") }
@@ -20,6 +25,9 @@ enum AppLocalization {
             }
         }
         guard Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String == "Screenshot", Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String == "Screenshot" else { throw CaptureError.message("应用展示名称未统一") }
+        guard let licenseURL = Bundle.main.resourceURL?.appendingPathComponent("LICENSE.txt"),
+              let license = try? String(contentsOf: licenseURL, encoding: .utf8),
+              license.hasPrefix("MIT License"), license.contains("Permission is hereby granted"), license.contains("kirktools") else { throw CaptureError.message("安装包缺少完整的 MIT 许可证") }
         guard localized("capture.normal") != "capture.normal" else { throw CaptureError.message("菜单语言资源加载失败") }
     }
 }
@@ -66,10 +74,10 @@ struct ScreenPermissionAccess {
             buildMainMenu()
             let screen = NSScreen.main!.visibleFrame
             let demo = makeDemoImage()
-            let image = ProcessInfo.processInfo.environment["KIRK_DOCUMENTATION_DIR"] != nil
+            let image = ProcessInfo.processInfo.environment["SCREENSHOT_DOCUMENTATION_DIR"] != nil
                 ? demo.cropping(to: CGRect(x: 0, y: 0, width: demo.width, height: Int(Double(demo.width) * 0.54)))! : demo
             present(image, region: CGRect(x: screen.midX - 300, y: screen.midY - 150, width: 600, height: 420), allowScroll: true)
-            if let directory = ProcessInfo.processInfo.environment["KIRK_DOCUMENTATION_DIR"], let editor {
+            if let directory = ProcessInfo.processInfo.environment["SCREENSHOT_DOCUMENTATION_DIR"], let editor {
                 do {
                     try writeDocumentationEditor(editor, to: URL(fileURLWithPath: directory).appendingPathComponent("editor.png"))
                     NSApp.terminate(nil)
@@ -83,6 +91,15 @@ struct ScreenPermissionAccess {
             Task { @MainActor in
                 do { try await runStartupSmokeTest(self); print("STARTUP SMOKE PASSED"); NSApp.terminate(nil) }
                 catch { fputs("STARTUP SMOKE FAILED: \(error)\n", stderr); exit(1) }
+            }
+            return
+        }
+        if CommandLine.arguments.contains("--documentation-scroll-demo") {
+            Task { @MainActor in
+                do {
+                    guard let path = ProcessInfo.processInfo.environment["SCREENSHOT_DOCUMENTATION_DIR"] else { throw CaptureError.message("请指定文档素材目录") }
+                    try await writeDocumentationScroll(to: URL(fileURLWithPath: path)); NSApp.terminate(nil)
+                } catch { fputs("文档滚动演示失败：\(error)\n", stderr); exit(1) }
             }
             return
         }
@@ -262,7 +279,7 @@ struct ScreenPermissionAccess {
             case .save:
                 NSApp.activate(ignoringOtherApps: true)
                 let panel = NSSavePanel(); panel.allowedContentTypes = [.png]
-                panel.nameFieldStringValue = "Kirk-\(Date.now.formatted(.iso8601).replacingOccurrences(of: ":", with: "-")).png"
+                panel.nameFieldStringValue = "Screenshot-\(Date.now.formatted(.iso8601).replacingOccurrences(of: ":", with: "-")).png"
                 guard panel.runModal() == .OK, let url = panel.url else { return }
                 do { try image.png().write(to: url, options: .atomic) } catch { showError(error) }
             }
@@ -366,7 +383,7 @@ struct ScreenPermissionAccess {
         version.textColor = .secondaryLabelColor
         let updates = NSButton(title: "检查更新…", target: self, action: #selector(checkForUpdates))
         let versionActions = NSStackView(views: [version, updates]); versionActions.spacing = 12; views.append(versionActions)
-        let source = Bundle.main.object(forInfoDictionaryKey: "KirkBuildSource") as? String ?? "开发构建"
+        let source = Bundle.main.object(forInfoDictionaryKey: "BuildSource") as? String ?? "开发构建"
         let location = NSTextField(wrappingLabelWithString: "源码：\(source)\n当前应用：\(Bundle.main.bundlePath)")
         location.font = .systemFont(ofSize: 11); location.textColor = .secondaryLabelColor; views.append(location)
         let stack = NSStackView(views: views); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 18
@@ -399,7 +416,7 @@ struct ScreenPermissionAccess {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
-@main struct KirkScreenshotMain {
+@main struct ScreenshotMain {
     @MainActor static func main() {
         if let index = CommandLine.arguments.firstIndex(of: "--apply-update") {
             guard CommandLine.arguments.count == index + 2 else { exit(1) }
