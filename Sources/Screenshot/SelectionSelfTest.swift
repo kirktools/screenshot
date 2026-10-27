@@ -95,3 +95,71 @@ import AppKit
     print("窗口交互：失去第一响应者时 Esc/双回车、首击、透明区域 alpha、失活清理及重复完成通过")
     print("窗口预选：前后层级、单击、鼠标抖动、手动/反向拖选、过小选区、空候选、跨屏负坐标和元数据过滤通过")
 }
+
+/// 用会在选区出现后“消失”的合成提示验证启动顺序，不读取桌面或操作系统鼠标。
+@MainActor func runFrozenSelectionSelfTest() async throws {
+    func require(_ value: Bool, _ message: String) throws {
+        if !value { throw CaptureError.message("冻结选区：" + message) }
+    }
+    func wait(_ condition: () -> Bool) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        while !condition() {
+            guard ProcessInfo.processInfo.systemUptime < deadline else { throw CaptureError.message("冻结选区：等待超时") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+    let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main!
+    let region = screen.frame
+    let ctx = CGContext(data: nil, width: Int(region.width), height: Int(region.height), bitsPerComponent: 8,
+                        bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.setFillColor(CGColor(red: 1, green: 0, blue: 1, alpha: 1)); ctx.fill(CGRect(origin: .zero, size: region.size))
+    let original = ctx.makeImage()!
+    let snapshot = FrozenCapture(tiles: [FrozenCaptureTile(region: region, image: original)])
+    let delegate = AppDelegate()
+    delegate.permissionAccess = ScreenPermissionAccess(isAuthorized: { true }, request: { false }, openSettings: {})
+    var pending: CheckedContinuation<FrozenCapture, Error>?, captures = 0
+    delegate.freezeSelection = {
+        captures += 1
+        return try await withCheckedThrowingContinuation { pending = $0 }
+    }
+    func activeSelection() -> SelectionView? {
+        NSApp.windows.first { $0 is SelectionWindow && $0.isVisible && $0.frame == region }?.contentView as? SelectionView
+    }
+    delegate.capture(scrolling: false)
+    try await wait { pending != nil || activeSelection() != nil }
+    try require(pending != nil, "选区已经出现，但触发时的快照尚未开始")
+    try require(activeSelection() == nil, "快照完成前已经显示选区，悬浮提示会被焦点或鼠标打断")
+    delegate.capture(scrolling: false)
+    try require(captures == 1, "准备期间重复快捷键启动多次采集")
+    pending!.resume(returning: snapshot); pending = nil
+    try await wait { activeSelection() != nil }
+    let view = activeSelection()!, selector = view.owner!
+    defer { selector.finish(cancel: true); delegate.diagnosticEditor?.close() }
+    try require(selector.diagnosticRetainsSnapshot, "选择器没有保留按键时的画面")
+    // 目标内容此时已消失；选区与导出都必须继续使用原先的紫色像素。
+    ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1)); ctx.fill(CGRect(origin: .zero, size: region.size))
+    guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw CaptureError.message("冻结选区：无法渲染") }
+    view.cacheDisplay(in: view.bounds, to: bitmap)
+    let color = bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)!.usingColorSpace(.deviceRGB)!
+    try require(color.redComponent - color.greenComponent > 0.3 && color.blueComponent - color.greenComponent > 0.3, "选区背景仍显示实时桌面，冻结的提示不可见：\(color)")
+    let selected = CGRect(x: region.midX - 120, y: region.midY - 80, width: 240, height: 160)
+    selector.mouseDown(at: selected.origin)
+    selector.mouseUp(at: CGPoint(x: selected.maxX, y: selected.maxY))
+    try await wait { delegate.diagnosticEditor != nil }
+    let editor = delegate.diagnosticEditor!
+    try require(captures == 1 && !selector.diagnosticRetainsSnapshot, "框选后重新采集，或已关闭选择器仍持有整屏快照")
+    let expected = snapshot.crop(selected)!, actual = editor.canvas.state.image
+    try require(actual.width == expected.width && actual.height == expected.height && (try actual.png()) == (try expected.png()), "编辑结果没有使用触发时的像素")
+    let board = NSPasteboard(name: .init("Screenshot-Frozen-Selection-\(UUID().uuidString)")); defer { board.releaseGlobally() }
+    try actual.copyPNG(to: board)
+    try require(board.data(forType: .png) == (try actual.png()), "冻结截图复制结果不一致")
+    editor.close()
+    try require(!editor.diagnosticFrozenCaptureRetained, "关闭编辑后未释放冻结背景")
+    let cancel = RegionSelector()
+    var cancelled = 0
+    cancel.completion = { if $0 == nil { cancelled += 1 } }
+    cancel.begin(candidates: [region], frozenCapture: snapshot)
+    NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: NSApp)
+    try require(cancelled == 1 && !cancel.diagnosticRetainsSnapshot && activeSelection() == nil, "显示器布局变化后没有取消并释放快照")
+    print("冻结选区：快照先于选区/准星、重复按键、提示消失后仍可见、原像素编辑/复制、关闭及显示器变化释放通过")
+}

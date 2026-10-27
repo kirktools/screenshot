@@ -62,6 +62,17 @@ struct ScreenPermissionAccess {
     private var activationObserver: NSObjectProtocol?
     private var hotkeyWarnings: [String] = []
     var permissionAccess = ScreenPermissionAccess()
+    // 先拍下桌面，再允许选区窗口激活；测试可替换成合成快照，不读取屏幕。
+    var freezeSelection: () async throws -> FrozenCapture = {
+        let provider = MacCaptureProvider()
+        try await provider.prepareForSelection()
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main else {
+            throw CaptureError.message("当前没有可捕获的显示器")
+        }
+        do { return try await provider.frozenCapture(containing: screen.frame) }
+        catch { MacCaptureProvider.invalidateSelectionContent(); throw error }
+    }
+    var diagnosticEditor: EditorController? { editor }
     var schedulePermissionRequest: (@escaping () -> Void) -> Void = { action in DispatchQueue.main.async(execute: action) }
     private var permissionRequestPending = false
     private var hasRequestedPermission = false
@@ -137,8 +148,10 @@ struct ScreenPermissionAccess {
             return
         }
         if CommandLine.arguments.contains("--self-test") {
-            do { try runSelfTest(); print("SELF-TEST PASSED"); NSApp.terminate(nil) }
-            catch { fputs("SELF-TEST FAILED: \(error)\n", stderr); exit(1) }
+            Task { @MainActor in
+                do { try await runSelfTest(); print("SELF-TEST PASSED"); NSApp.terminate(nil) }
+                catch { fputs("SELF-TEST FAILED: \(error)\n", stderr); exit(1) }
+            }
             return
         }
         lastExternalApp = NSWorkspace.shared.frontmostApplication
@@ -240,33 +253,46 @@ struct ScreenPermissionAccess {
         let frontmost = NSWorkspace.shared.frontmostApplication
         previousApp = frontmost?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? lastExternalApp : frontmost
         settings?.orderOut(nil); editor?.window?.orderOut(nil)
-        let selector = RegionSelector(); self.selector = selector
-        selector.completion = { [weak self] rect in
-            guard let self else { return }
-            self.selector = nil
-            self.previousApp?.activate(options: [])
-            guard let rect else { self.busy = false; return }
-            if scrolling && !NSScreen.screens.contains(where: { $0.frame.contains(rect) }) {
-                self.busy = false; showError(CaptureError.message("长截图需在同一块显示器内选择单一滚动区域。普通截图支持跨屏。")); return
-            }
-            Task { @MainActor [self] in
-                do {
-                    let provider = MacCaptureProvider(); self.provider = provider
-                    try await provider.prepare()
-                    try await Task.sleep(for: .milliseconds(250))
-                    if scrolling {
-                        guard rect.height >= 100, rect.width >= 80 else { throw CaptureError.message("长截图区域至少需要 80 × 100 点，请框选正文内容。") }
-                        try self.beginScroll(rect, provider: provider)
-                    } else {
-                        let frozen = try await provider.frozenCapture(containing: rect)
-                        guard let image = frozen.crop(rect) else { throw CaptureError.message("无法从屏幕快照裁取选区") }
-                        self.busy = false; self.provider = nil; self.present(image, region: rect, allowScroll: true, frozenCapture: frozen)
+        Task { @MainActor [self] in
+            do {
+                // 切勿在拍下悬浮提示之前显示选区或激活本应用。
+                let frozen = scrolling ? nil : try await freezeSelection()
+                let selector = RegionSelector(); self.selector = selector
+                selector.completion = { [weak self] rect in
+                    guard let self else { return }
+                    self.selector = nil
+                    guard let rect else { self.previousApp?.activate(options: []); self.busy = false; return }
+                    if !scrolling {
+                        guard let frozen, let image = frozen.crop(rect) else {
+                            self.busy = false
+                            showError(CaptureError.message("选区超出已冻结的屏幕范围或像素上限，请在鼠标所在显示器缩小选区后重试。")); return
+                        }
+                        self.busy = false
+                        self.present(image, region: rect, allowScroll: true, frozenCapture: frozen)
+                        return
                     }
-                } catch { self.busy = false; self.provider = nil; showError(CaptureError.message("\(error.localizedDescription)\n若刚授予屏幕录制权限，请退出应用后重新打开。")) }
+                    self.previousApp?.activate(options: [])
+                    guard NSScreen.screens.contains(where: { $0.frame.contains(rect) }) else {
+                        self.busy = false; showError(CaptureError.message("长截图需在同一块显示器内选择单一滚动区域。普通截图支持跨屏。")); return
+                    }
+                    Task { @MainActor [self] in
+                        do {
+                            let provider = MacCaptureProvider(); self.provider = provider
+                            try await provider.prepare()
+                            try await Task.sleep(for: .milliseconds(250))
+                            guard rect.height >= 100, rect.width >= 80 else { throw CaptureError.message("长截图区域至少需要 80 × 100 点，请框选正文内容。") }
+                            try self.beginScroll(rect, provider: provider)
+                        } catch { self.busy = false; self.provider = nil; showError(error) }
+                    }
+                }
+                selector.begin(frozenCapture: frozen)
+            } catch {
+                self.busy = false
+                showError(CaptureError.message("\(error.localizedDescription)\n若刚授予屏幕录制权限，请退出应用后重新打开。"))
             }
         }
-        selector.begin()
     }
+
     private func beginScroll(_ region: CGRect, provider: MacCaptureProvider) throws {
         let session = ScrollSession(provider: provider, region: region, hotkeys: hotkeys)
         self.session = session

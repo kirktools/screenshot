@@ -62,15 +62,19 @@ final class SelectionWindow: NSWindow {
 @MainActor final class RegionSelector {
     private var windows: [NSWindow] = []
     private var state = RegionSelectionState(candidates: [])
+    private var frozenCapture: FrozenCapture?
+    private var screenObserver: NSObjectProtocol?
+    var diagnosticRetainsSnapshot: Bool { frozenCapture != nil }
     private var cursorPushed = false
     private var keyMonitor: Any?
     private var activationObserver: NSObjectProtocol?
     private var deactivationObserver: NSObjectProtocol?
     var completion: ((CGRect?) -> Void)?
-    func begin(candidates: [CGRect]? = nil) {
+    func begin(candidates: [CGRect]? = nil, frozenCapture: FrozenCapture? = nil) {
         guard windows.isEmpty else { return }
         let screens = NSScreen.screens
         guard !screens.isEmpty else { let callback = completion; completion = nil; callback?(nil); return }
+        self.frozenCapture = frozenCapture
         let desktop = screens.reduce(CGRect.null) { $0.union($1.frame) }
         let regions: [CGRect]
         if let candidates { regions = candidates }
@@ -102,6 +106,9 @@ final class SelectionWindow: NSWindow {
         deactivationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: NSApp, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.finish(cancel: true) }
         }
+        screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: NSApp, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.finish(cancel: true) }
+        }
         NSApp.activate(ignoringOtherApps: true)
         focusSelectionWindow()
         NSCursor.crosshair.push(); cursorPushed = true
@@ -122,10 +129,10 @@ final class SelectionWindow: NSWindow {
     }
     private func redraw() { windows.forEach { $0.contentView?.needsDisplay = true } }
     func mouseMoved() { state.hover(at: NSEvent.mouseLocation); redraw() }
-    func mouseDown() { state.mouseDown(at: NSEvent.mouseLocation); redraw() }
+    func mouseDown(at point: CGPoint = NSEvent.mouseLocation) { state.mouseDown(at: point); redraw() }
     func drag() { state.drag(to: NSEvent.mouseLocation); redraw() }
-    func mouseUp() {
-        if state.mouseUp(at: NSEvent.mouseLocation) != nil { finish() }
+    func mouseUp(at point: CGPoint = NSEvent.mouseLocation) {
+        if state.mouseUp(at: point) != nil { finish() }
         else { redraw() }
     }
     func finish(cancel: Bool = false) {
@@ -136,9 +143,17 @@ final class SelectionWindow: NSWindow {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor); self.keyMonitor = nil }
         if let activationObserver { NotificationCenter.default.removeObserver(activationObserver); self.activationObserver = nil }
         if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver); self.deactivationObserver = nil }
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver); self.screenObserver = nil }
+        frozenCapture = nil
         windows.forEach { $0.orderOut(nil); $0.close() }; windows.removeAll()
         if cursorPushed { NSCursor.pop(); cursorPushed = false }
         let cb = completion; completion = nil; cb?(result)
+    }
+    func drawSnapshot(in view: NSView) {
+        guard let frame = view.window?.frame else { return }
+        for tile in frozenCapture?.tiles ?? [] {
+            tile.image.nsImage.draw(in: tile.region.offsetBy(dx: -frame.minX, dy: -frame.minY))
+        }
     }
     func rect(in view: NSView) -> CGRect {
         guard let window = view.window else { return .zero }
@@ -167,12 +182,20 @@ final class SelectionView: NSView {
         if owner?.handleKey(event) != true { super.keyDown(with: event) }
     }
     override func draw(_ dirtyRect: NSRect) {
+        owner?.drawSnapshot(in: self)
         NSColor.black.withAlphaComponent(0.28).setFill(); bounds.fill()
         let rect = owner?.rect(in: self) ?? .zero
         if rect.width > 0 {
             // 完全透明的孔洞可能让 WindowServer 把点击交给下层窗口。
             // 极低 alpha 保持选区可命中；截图采集仍排除本应用的覆盖窗口。
-            NSColor.black.withAlphaComponent(0.01).setFill(); rect.fill(using: .copy)
+            if owner?.diagnosticRetainsSnapshot == true {
+                NSGraphicsContext.saveGraphicsState()
+                NSBezierPath(rect: rect).addClip()
+                owner?.drawSnapshot(in: self)
+                NSGraphicsContext.restoreGraphicsState()
+            } else {
+                NSColor.black.withAlphaComponent(0.01).setFill(); rect.fill(using: .copy)
+            }
             CaptureOutline.draw(rect.insetBy(dx: 2, dy: 2))
         }
         let help = "单击选择高亮窗口 · 拖动自选区域 · Esc 取消 · 长图请避开固定栏"

@@ -46,6 +46,25 @@ enum CaptureError: LocalizedError {
 }
 
 @MainActor final class MacCaptureProvider: RegionCaptureProvider {
+    // 仅缓存显示器/应用元数据，不缓存屏幕像素、不后台采集。
+    // 连续截图复用短期有效的枚举结果，省去每次重新枚举窗口的等待。
+    private static var recentContent: (value: SCShareableContent, layout: String, time: Double)?
+    private static var layout: String {
+        NSScreen.screens.map { "\($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] ?? ""):\($0.frame):\($0.backingScaleFactor)" }.joined(separator: ";")
+    }
+    static func invalidateSelectionContent() { recentContent = nil }
+    func prepareForSelection() async throws {
+        let now = ProcessInfo.processInfo.systemUptime
+        if let cached = Self.recentContent, cached.layout == Self.layout, now - cached.time < 30 {
+            content = cached.value
+            screenSnapshot = Dictionary(uniqueKeysWithValues: NSScreen.screens.compactMap { screen in
+                guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { return nil }
+                return (id, screen.frame)
+            })
+            return
+        }
+        try await prepare()
+    }
     private var content: SCShareableContent?
     private var screenSnapshot: [CGDirectDisplayID: CGRect] = [:]
     func prepare() async throws {
@@ -55,6 +74,7 @@ enum CaptureError: LocalizedError {
             throw CaptureError.message("当前没有可捕获的显示器。请确认屏幕已解锁并点亮、录屏权限有效，再重新开始。")
         }
         content = available
+        Self.recentContent = (available, Self.layout, ProcessInfo.processInfo.systemUptime)
         screenSnapshot = Dictionary(uniqueKeysWithValues: NSScreen.screens.compactMap { screen in
             guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { return nil }
             return (id, screen.frame)

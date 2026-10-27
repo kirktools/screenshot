@@ -3,9 +3,10 @@ import Carbon
 import StitchCore
 
 /// 不读取桌面、不申请权限：验证平台渲染、拼接方向和实际导出像素。
-@MainActor func runSelfTest() throws {
+@MainActor func runSelfTest() async throws {
     guard localized("capture.normal") != "capture.normal" else { throw CaptureError.message("运行位置的语言资源未加载") }
     try runSelectionSelfTest()
+    try await runFrozenSelectionSelfTest()
     try runPermissionFlowSelfTest()
     try runUpdateSelfTest()
     func require(_ condition: Bool, _ message: String) throws { if !condition { throw CaptureError.message(message) } }
