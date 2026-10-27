@@ -48,6 +48,62 @@ import AppKit
     try require(regions == [CGRect(x: -300, y: 150, width: 200, height: 400), CGRect(x: 900, y: 600, width: 100, height: 100)],
                 "窗口过滤、负坐标转换、屏幕边缘裁切或前后顺序不正确：\(regions)")
     try require(WindowPreselection.regions(from: [], excludingPID: 99, screenTop: 800, desktop: desktop).isEmpty, "空窗口列表不能降级")
+    // 菜单栏可低于 32 点，但普通窗口与手动拖选仍保留原最小尺寸。
+    let primary = CGRect(x: 0, y: 0, width: 1440, height: 900)
+    let bar = CGRect(x: 0, y: 870, width: 1440, height: 30)
+    let menuInfo = [entry(CGRect(x: 0, y: 0, width: 1440, height: 30), layer: Int(CGWindowLevelForKey(.mainMenuWindow)))]
+    let menuRegions = WindowPreselection.regions(from: menuInfo, excludingPID: 99, screenTop: 900, desktop: primary)
+    try require(menuRegions == [bar], "顶部菜单栏被普通窗口层级/最小高度过滤")
+    var menuState = RegionSelectionState(candidates: menuRegions)
+    menuState.mouseDown(at: CGPoint(x: 1400, y: 885))
+    try require(menuState.mouseUp(at: CGPoint(x: 1400, y: 885)) == bar, "薄菜单栏无法单击确认")
+    for height: CGFloat in [22, 24, 30, 37] {
+        let info = [entry(CGRect(x: 1000, y: 0, width: 200, height: height), layer: Int(CGWindowLevelForKey(.statusWindow))),
+                    entry(CGRect(x: 0, y: 0, width: 1440, height: height), layer: Int(CGWindowLevelForKey(.mainMenuWindow))),
+                    entry(CGRect(x: 0, y: 0, width: 1440, height: 900))]
+        let bars = WindowPreselection.regions(from: info, excludingPID: 99, screenTop: 900, desktop: primary)
+        let expected = CGRect(x: 0, y: 900 - height, width: 1440, height: height)
+        try require(bars == [expected, primary], "菜单栏片段没有合并为整条，或没有优先于整屏窗口")
+        var state = RegionSelectionState(candidates: bars)
+        state.hover(at: CGPoint(x: 1400, y: 899))
+        try require(state.canConfirmSelection && state.selection == expected, "薄菜单栏无法回车确认")
+        state.mouseDown(at: CGPoint(x: 100, y: 850)); state.drag(to: CGPoint(x: 300, y: 872))
+        try require(state.mouseUp(at: CGPoint(x: 300, y: 872)) == nil, "手动拖选也被放宽为不足 32 点")
+        state.hover(at: CGPoint(x: 1400, y: 899))
+        try require(state.canConfirmSelection && state.selection == expected, "无效拖选后无法重新预选菜单栏")
+    }
+    let left = CGRect(x: -1200, y: -200, width: 1200, height: 800)
+    let above = CGRect(x: 0, y: 900, width: 1000, height: 700)
+    let multiDesktop = primary.union(left).union(above)
+    let multi = [entry(CGRect(x: -1200, y: 300, width: 1200, height: 24), layer: Int(CGWindowLevelForKey(.mainMenuWindow))),
+                 entry(CGRect(x: 0, y: -700, width: 1000, height: 37), layer: Int(CGWindowLevelForKey(.mainMenuWindow)))]
+    let multiBars = WindowPreselection.regions(from: multi, excludingPID: 99, screenTop: 900, desktop: multiDesktop, screens: [primary, left, above])
+    try require(multiBars == [CGRect(x: -1200, y: 576, width: 1200, height: 24), CGRect(x: 0, y: 1563, width: 1000, height: 37)], "负坐标/上方显示器的菜单栏坐标转换错误")
+    let rejected = [entry(CGRect(x: 0, y: -24, width: 1440, height: 24), layer: Int(CGWindowLevelForKey(.mainMenuWindow))),
+                    entry(CGRect(x: 0, y: 30, width: 1440, height: 24), layer: Int(CGWindowLevelForKey(.mainMenuWindow))),
+                    entry(CGRect(x: 1000, y: -182, width: 440, height: 1265), layer: Int(CGWindowLevelForKey(.statusWindow))),
+                    entry(CGRect(x: 0, y: 0, width: 1440, height: 24), pid: 99, layer: Int(CGWindowLevelForKey(.mainMenuWindow))),
+                    entry(CGRect(x: 0, y: 0, width: 1440, height: 24), layer: Int(CGWindowLevelForKey(.mainMenuWindow)), alpha: 0),
+                    entry(CGRect(x: 0, y: 0, width: 1440, height: 24)),
+                    entry(CGRect(x: 0, y: 0, width: 200, height: 200), layer: Int(CGWindowLevelForKey(.popUpMenuWindow)))]
+    try require(WindowPreselection.regions(from: rejected, excludingPID: 99, screenTop: 900, desktop: primary).isEmpty,
+                "隐藏菜单栏、非顶部窗口、通知面板、自身窗口、透明条带、小普通窗口或下拉菜单被误选")
+    let thinSelector = RegionSelector()
+    let actualScreen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main!
+    let thinBar = CGRect(x: actualScreen.frame.minX, y: actualScreen.frame.maxY - 24, width: actualScreen.frame.width, height: 24)
+    for keyCode: UInt16? in [nil, 36, 76] {
+        var confirmed: CGRect?
+        thinSelector.completion = { confirmed = $0 }
+        thinSelector.begin(candidates: [thinBar])
+        thinSelector.mouseDown(at: CGPoint(x: thinBar.midX, y: thinBar.midY))
+        if let keyCode {
+            let enter = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                        windowNumber: 0, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: keyCode)!
+            _ = thinSelector.handleKey(enter)
+        } else { thinSelector.mouseUp(at: CGPoint(x: thinBar.midX, y: thinBar.midY)) }
+        try require(confirmed == thinBar, "原生选择器的单击/回车仍拒绝 24 点菜单栏")
+    }
+    print("菜单栏预选：可见层级、22/24/30/37 点、多屏负坐标、片段去重、单击/双回车及隐藏/面板误选防护通过")
     // 故意把第一响应者从框选视图移走，复现 Esc 只依赖视图时无法退出。
     let selector = RegionSelector()
     var cancelled = 0
