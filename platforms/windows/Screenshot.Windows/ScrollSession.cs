@@ -120,7 +120,7 @@ internal sealed class ScrollSession : IDisposable
     {
         if (disposed) return; disposed = true; timer.Stop(); timer.Dispose(); panel.Dispose(); boundary.Dispose();
         // 处理中结果不会再写入列表；Bitmap/GrayFrame 由该帧自己的 finally 释放。
-        foreach (var segment in segments) segment.Image.Dispose(); segments.Clear(); Closed?.Invoke();
+        foreach (var segment in segments) segment.Image.Dispose(); segments.Clear(); tracker.Dispose(); Closed?.Invoke();
     }
 }
 internal sealed class Boundary : Form

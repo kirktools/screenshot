@@ -9,7 +9,7 @@ permissions:
 jobs:
   windows:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
       DOTNET_NOLOGO: 1
@@ -32,6 +32,12 @@ jobs:
           dotnet-version: '10.0.x'
       - name: 公开内容检查
         run: python scripts/check-public-content.py
+      - name: 安装固定官方 Swift 编译器
+        shell: pwsh
+        run: ./scripts/setup-swift-windows.ps1
+      - name: 编译同一份 Swift 核心与原生桥接
+        shell: pwsh
+        run: ./scripts/build-stitch-core.ps1 -Runtime '${{ matrix.runtime }}'
       - name: 平台独立算法及更新安全回归
         run: dotnet run --project platforms/windows/Screenshot.Tests -c Release
       - name: 构建自带运行时的便携安装包

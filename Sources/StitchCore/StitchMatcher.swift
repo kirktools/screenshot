@@ -1,5 +1,3 @@
-import Foundation
-
 /// 平台无关的亮度帧。采样必须保持原始纵向像素，避免接缝量化误差。
 public struct GrayFrame: Sendable {
     public let width: Int

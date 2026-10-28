@@ -16,7 +16,7 @@ foreach (var vector in vectors.RootElement.EnumerateArray())
     Check(actual == vector.GetProperty("expected").GetString(), vector.GetProperty("name").GetString()!);
 }
 var first = vectors.RootElement[0]; var a = Frame(first.GetProperty("previous")); var b = Frame(first.GetProperty("next"));
-var tracker = new StitchTracker(); Check(tracker.Consume(a, 0).Kind == TrackingKind.Seed, "tracker seed");
+using var tracker = new StitchTracker(); Check(tracker.Consume(a, 0).Kind == TrackingKind.Seed, "tracker seed");
 Check(tracker.Consume(b, .1).Kind == TrackingKind.Append, "tracker append");
 Check(tracker.Consume(a, .2).Kind == TrackingKind.Recovering, "reverse preserves anchor");
 Check(tracker.Consume(a, 1.1).Kind == TrackingKind.Paused, "sustained reverse pauses");
