@@ -34,11 +34,24 @@ internal static class Program
             }
             if (!File.Exists(Path.Combine(root, "standard-user"))) throw new Exception("未验证普通用户权限，不能绕过高权限更新保护");
             var deadline = DateTime.UtcNow.AddSeconds(40);
-            while (!File.Exists(Path.Combine(root, "started.pid")))
-            { if (DateTime.UtcNow > deadline) throw new Exception("新版启动确认超时: " + Diagnostic(root, task)); Thread.Sleep(100); }
+            Process? started = null;
+            while (started == null)
+            {
+                // 验证生产启动确认与实际进程，不依赖 Shell 是否继承 CI 环境变量。
+                if (File.Exists(Path.Combine(task, "started"))) started = FindOwnedProcess(executable);
+                if (started != null) break;
+                if (DateTime.UtcNow > deadline) throw new Exception("新版启动确认超时: " + Diagnostic(root, task));
+                Thread.Sleep(100);
+            }
+            using (started)
+            {
+                File.WriteAllText(Path.Combine(root, "started.pid"), started.Id.ToString());
+                var actual = started.MainModule?.FileVersionInfo;
+                if (actual == null || actual.FileMajorPart != 999 || actual.FileMinorPart != 0 || actual.FileBuildPart != 0) throw new Exception("实际启动版本不符");
+            }
             int helperPid = int.Parse(File.ReadAllText(Path.Combine(root, "helper.pid")));
             WaitFor(helperPid, 20000);
-            if (Hash(executable) != expected || !File.ReadAllText(Path.Combine(root, "started.version")).StartsWith("999.0.0", StringComparison.Ordinal)) throw new Exception("新版文件或实际启动版本不符");
+            if (Hash(executable) != expected) throw new Exception("新版文件不符");
             var backups = Directory.GetDirectories(install, ".backup-*");
             if (backups.Length != 1 || Hash(Path.Combine(backups[0], "Screenshot.exe")) != original) throw new Exception("旧版备份不完整");
             if (!File.ReadAllText(executable + ":Zone.Identifier").Contains("ZoneId=3", StringComparison.Ordinal)) throw new Exception("来源标记未保留");
@@ -54,6 +67,20 @@ internal static class Program
             try { if (Directory.Exists(task)) Directory.Delete(task, true); } catch (IOException) { }
             try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch (IOException) { }
         }
+    }
+    static Process? FindOwnedProcess(string executable)
+    {
+        Process? found = null;
+        foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(executable)))
+        {
+            try
+            {
+                if (!process.HasExited && string.Equals(process.MainModule?.FileName, executable, StringComparison.OrdinalIgnoreCase)) { found = process; continue; }
+            }
+            catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { }
+            process.Dispose();
+        }
+        return found;
     }
     static string Diagnostic(string root, string task) => string.Join(" | ", new[] { Path.Combine(root, "error.txt"), Path.Combine(task, "failure.txt"), Path.Combine(task, "phase.txt") }.Where(File.Exists).Select(File.ReadAllText).DefaultIfEmpty("无助手错误")) + " | markers=" + string.Join(",", new[] { "ready", "started", "complete" }.Select(n => n + ":" + File.Exists(Path.Combine(task, n))));
     static string Hash(string path) { using var stream = File.OpenRead(path); return Convert.ToHexString(SHA256.HashData(stream)); }

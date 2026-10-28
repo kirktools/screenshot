@@ -27,7 +27,6 @@ internal static class Updates
         directory = Path.GetFullPath(directory);
         if (Path.GetDirectoryName(directory) != Path.GetFullPath(Root) || !Guid.TryParseExact(Path.GetFileName(directory), "N", out _) || !File.Exists(Path.Combine(directory, "plan.json"))) throw new InvalidDataException("更新确认目录无效");
         File.WriteAllText(Path.Combine(directory, "started"), "started");
-        UpdateProcessFixture.Started();
     }
     public static void Cleanup()
     {
@@ -127,6 +126,7 @@ internal static class Updates
                 phase = "launch";
                 if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true") File.WriteAllText(Path.Combine(directory, "phase.txt"), phase);
                 using var child = Process.Start(start) ?? throw new IOException("新版没有启动");
+                if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true") File.WriteAllText(Path.Combine(directory, "phase.txt"), "waiting-start:pid=" + child.Id);
                 var deadline = DateTime.UtcNow.AddSeconds(15);
                 while (!File.Exists(Path.Combine(directory, "started")))
                 {

@@ -18,15 +18,6 @@ internal static class UpdateProcessFixture
             return root != null && Path.GetFileName(install) == "current" && Path.GetFileName(root).StartsWith("ScreenshotUpdateProcess-", StringComparison.Ordinal) && Path.TrimEndingDirectorySeparator(Path.GetDirectoryName(root)!) == Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath())) ? root : null;
         }
     }
-    internal static void Started()
-    {
-        if (Root is { } root)
-        {
-            File.WriteAllText(Path.Combine(root, "started.version"), typeof(Updates).Assembly.GetName().Version!.ToString());
-            File.WriteAllText(Path.Combine(root, "started.pid.tmp"), Environment.ProcessId.ToString());
-            File.Move(Path.Combine(root, "started.pid.tmp"), Path.Combine(root, "started.pid"));
-        }
-    }
     internal static int Prepare(string directory, string candidate)
     {
         string? root = Root;
