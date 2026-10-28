@@ -73,7 +73,7 @@ internal static class Program
         {
             // 只结束本测试临时副本的进程，不触碰其他 Screenshot 实例。
             StopOwned(Path.Combine(root, "started.pid"), install);
-            StopOwned(Path.Combine(root, "helper.pid"), task);
+            StopOwned(Path.Combine(root, "helper.pid"), task, "Screenshot.Update.exe");
             try { if (Directory.Exists(task)) Directory.Delete(task, true); } catch (IOException) { }
             try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch (IOException) { }
         }
@@ -82,13 +82,15 @@ internal static class Program
     static bool ConfirmOwnSource(int pid, string executable, string expectedHash, string helperPath, string helperHash)
     {
         using var helper = Process.GetProcessById(pid);
-        if (!string.Equals(helper.MainModule?.FileName, helperPath, StringComparison.OrdinalIgnoreCase) || Hash(helperPath) != helperHash || Hash(executable) != expectedHash)
-            throw new Exception("来源确认的测试进程或文件已变化");
         bool confirmed = false;
         EnumWindows((window, _) =>
         {
             GetWindowThreadProcessId(window, out uint owner);
             if (owner != pid || !IsWindowVisible(window) || WindowText(window) != "Open File - Security Warning" || WindowClass(window) != "#32770") return true;
+            // 先等待实际的来源对话框，再验证文件；复制阶段目标文件仍可能是旧版。
+            bool identity = SameFile(helper.MainModule?.FileName, helperPath), helperValid = Hash(helperPath) == helperHash, candidateValid = Hash(executable) == expectedHash;
+            if (!identity || !helperValid || !candidateValid)
+                throw new Exception($"来源确认的测试进程或文件已变化: identity={identity},helperHash={helperValid},candidateHash={candidateValid}");
             var controls = new List<IntPtr>();
             EnumChildWindows(window, (control, _) => { controls.Add(control); return true; }, IntPtr.Zero);
             if (!controls.Any(c => WindowText(c).Contains("Screenshot.exe", StringComparison.OrdinalIgnoreCase))) return true;
@@ -102,6 +104,21 @@ internal static class Program
         }, IntPtr.Zero);
         return confirmed;
     }
+    // Windows 可能返回 8.3 短路径；文件身份比较比路径字符串更严格且不受别名影响。
+    static bool SameFile(string? observed, string expected)
+    {
+        if (observed == null) return false;
+        using var a = File.OpenHandle(observed, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var b = File.OpenHandle(expected, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        if (!GetFileInformationByHandle(a, out var first) || !GetFileInformationByHandle(b, out var second)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        return first.Volume == second.Volume && first.IndexHigh == second.IndexHigh && first.IndexLow == second.IndexLow;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct FileInformation
+    {
+        public uint Attributes; public System.Runtime.InteropServices.ComTypes.FILETIME Created, Accessed, Written;
+        public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+    }
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetFileInformationByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle file, out FileInformation information);
     static string WindowText(IntPtr window) { var text = new StringBuilder(2048); GetWindowText(window, text, text.Capacity); return text.ToString(); }
     static string WindowClass(IntPtr window) { var text = new StringBuilder(100); GetClassName(window, text, text.Capacity); return text.ToString(); }
     [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr window, EnumWindow callback, IntPtr parameter);
@@ -132,7 +149,7 @@ internal static class Program
         {
             try
             {
-                if (!process.HasExited && string.Equals(process.MainModule?.FileName, executable, StringComparison.OrdinalIgnoreCase)) { found = process; continue; }
+                if (!process.HasExited && SameFile(process.MainModule?.FileName, executable)) { found = process; continue; }
             }
             catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { }
             process.Dispose();
@@ -143,13 +160,13 @@ internal static class Program
     static string Hash(string path) { using var stream = File.OpenRead(path); return Convert.ToHexString(SHA256.HashData(stream)); }
     static void WaitFor(int pid, int timeout)
     { try { using var process = Process.GetProcessById(pid); if (!process.WaitForExit(timeout)) throw new Exception("助手未正常退出"); } catch (ArgumentException) { } }
-    static void StopOwned(string marker, string directory)
+    static void StopOwned(string marker, string directory, string file = "Screenshot.exe")
     {
         try
         {
             if (!File.Exists(marker)) return;
             using var process = Process.GetProcessById(int.Parse(File.ReadAllText(marker)));
-            if (Path.GetDirectoryName(process.MainModule?.FileName)?.Equals(directory, StringComparison.OrdinalIgnoreCase) == true)
+            if (SameFile(process.MainModule?.FileName, Path.Combine(directory, file)))
             { process.Kill(); process.WaitForExit(5000); }
         }
         catch (ArgumentException) { } catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { }
