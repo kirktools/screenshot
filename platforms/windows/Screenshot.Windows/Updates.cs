@@ -93,7 +93,7 @@ internal static class Updates
     }
     public static int Apply(string directory)
     {
-        UpdatePlan? plan = null;
+        UpdatePlan? plan = null; string phase = "validate";
         try
         {
             EnsureUnelevated();
@@ -117,12 +117,14 @@ internal static class Updates
             catch (ArgumentException) { }
             if (File.Exists(Path.Combine(directory, "cancelled"))) return 0;
             if (Hash(oldExe) != plan.OldHash || Hash(newExe) != plan.NewHash) throw new InvalidDataException("更新文件在等待期间已变化，未覆盖");
+            phase = "replace";
             PortableInstall.Replace(install, candidate, () =>
             {
                 string executable = Path.Combine(install, "Screenshot.exe");
                 File.WriteAllText(executable + ":Zone.Identifier", "[ZoneTransfer]\r\nZoneId=3\r\n");
                 var start = new ProcessStartInfo(executable) { UseShellExecute = true, WorkingDirectory = install };
                 start.ArgumentList.Add("--update-started"); start.ArgumentList.Add(directory);
+                phase = "launch";
                 using var child = Process.Start(start) ?? throw new IOException("新版没有启动");
                 var deadline = DateTime.UtcNow.AddSeconds(15);
                 while (!File.Exists(Path.Combine(directory, "started")))
@@ -135,8 +137,12 @@ internal static class Updates
             File.WriteAllText(Path.Combine(directory, "complete"), "updated");
             return 0;
         }
-        catch (Exception)
+        catch (Exception error)
         {
+            if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true" && plan != null)
+            {
+                try { File.WriteAllText(Path.Combine(directory, "failure.txt"), phase + ": " + error.GetType().Name + ": " + error.Message); } catch (IOException) { }
+            }
             if (plan != null)
             {
                 try { Process.Start(new ProcessStartInfo(Path.Combine(plan.InstallDirectory, "Screenshot.exe")) { UseShellExecute = true })?.Dispose(); }

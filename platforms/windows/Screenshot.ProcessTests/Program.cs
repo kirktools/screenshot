@@ -35,7 +35,7 @@ internal static class Program
             if (!File.Exists(Path.Combine(root, "standard-user"))) throw new Exception("未验证普通用户权限，不能绕过高权限更新保护");
             var deadline = DateTime.UtcNow.AddSeconds(40);
             while (!File.Exists(Path.Combine(root, "started.pid")))
-            { if (DateTime.UtcNow > deadline) throw new Exception("新版启动确认超时，可能需要系统来源确认"); Thread.Sleep(100); }
+            { if (DateTime.UtcNow > deadline) throw new Exception("新版启动确认超时: " + Diagnostic(root, task)); Thread.Sleep(100); }
             int helperPid = int.Parse(File.ReadAllText(Path.Combine(root, "helper.pid")));
             WaitFor(helperPid, 20000);
             if (Hash(executable) != expected || !File.ReadAllText(Path.Combine(root, "started.version")).StartsWith("999.0.0", StringComparison.Ordinal)) throw new Exception("新版文件或实际启动版本不符");
@@ -55,6 +55,7 @@ internal static class Program
             try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch (IOException) { }
         }
     }
+    static string Diagnostic(string root, string task) => string.Join(" | ", new[] { Path.Combine(root, "error.txt"), Path.Combine(task, "failure.txt") }.Where(File.Exists).Select(File.ReadAllText).DefaultIfEmpty("无助手错误；请检查系统来源确认"));
     static string Hash(string path) { using var stream = File.OpenRead(path); return Convert.ToHexString(SHA256.HashData(stream)); }
     static void WaitFor(int pid, int timeout)
     { try { using var process = Process.GetProcessById(pid); if (!process.WaitForExit(timeout)) throw new Exception("助手未正常退出"); } catch (ArgumentException) { } }

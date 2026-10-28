@@ -16,7 +16,7 @@ internal static class Program
         using var instance = new Mutex(true, @"Local\kirktools." + Profile.Name.Replace(" ", ""), out bool first);
         if (!first) { MessageBox.Show("Screenshot 已在系统托盘运行。", "Screenshot"); return 0; }
         try { using var app = new ScreenshotContext(); if (args is ["--update-started", var directory]) Updates.MarkStarted(directory); Application.Run(app); return 0; }
-        catch (Exception) { MessageBox.Show("启动失败。请把完整安装包解压到可写目录后运行；不要直接在 ZIP 中启动。", "Screenshot"); return 1; }
+        catch (Exception error) { if (UpdateProcessFixture.Root is { } root) File.WriteAllText(Path.Combine(root, "error.txt"), "startup: " + error.GetType().Name + ": " + error.Message); MessageBox.Show("启动失败。请把完整安装包解压到可写目录后运行；不要直接在 ZIP 中启动。", "Screenshot"); return 1; }
     }
 }
 internal sealed class ScreenshotContext : ApplicationContext

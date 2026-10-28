@@ -56,7 +56,7 @@ internal static class DesktopSelfTest
         using (var expected = Capture.Crop(document, new(Point.Empty, region.Size)))
         {
             double difference = new StitchMatcher().Difference(Capture.Gray(capture), Capture.Gray(expected));
-            Console.WriteLine($"CAPTURE: dpi={fixture.DeviceDpi}, imageDpi={document.HorizontalResolution}, region={region.Size}, difference={difference:F3}");
+            Console.WriteLine($"CAPTURE: dpi={fixture.DeviceDpi}, imageDpi={document.HorizontalResolution}, region={region.Size}, difference={difference:F3}, paints={fixture.Paints}, foregroundSelf={Native.GetForegroundWindow() == fixture.Handle}, mean={Capture.Gray(capture).Pixels.Average(v => (double)v):F2}");
             if (difference > .1)
                 throw new InvalidOperationException("自身测试窗口与 GDI 实际采集不一致，可能存在遮挡、缩放或无交互桌面");
         }
@@ -111,7 +111,7 @@ internal static class DesktopSelfTest
     }
     sealed class Fixture : Form
     {
-        readonly Bitmap document; int offset;
+        readonly Bitmap document; int offset; public int Paints;
         public Fixture(Bitmap document)
         {
             this.document = document;
@@ -119,6 +119,6 @@ internal static class DesktopSelfTest
             ShowInTaskbar = false; TopMost = true; DoubleBuffered = true; StartPosition = FormStartPosition.Manual;
         }
         public void ScrollTo(int value) { offset = value; Refresh(); }
-        protected override void OnPaint(PaintEventArgs e) => e.Graphics.DrawImageUnscaled(document, 0, -offset);
+        protected override void OnPaint(PaintEventArgs e) { Paints++; e.Graphics.DrawImageUnscaled(document, 0, -offset); }
     }
 }
