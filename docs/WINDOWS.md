@@ -1,6 +1,6 @@
 # Windows 使用与开发
 
-Windows 客户端使用 C# / .NET 10 / Windows Forms，与 macOS 的 Swift / AppKit 适配层并列。没有第三方 UI、图像或更新库。拼接算法按 Swift 实现移植，两端消费 `Tests/Fixtures/stitch-vectors.json` 的相同字节与预期结果。
+Windows 原生界面和系统适配使用 C# / .NET 10 / Windows Forms，拼接与连续恢复直接调用 `Sources/StitchCore` 的同一份 Swift 实现。C ABI 只负责数据封送，Windows 不维护第二套算法。没有第三方 UI、图像或更新库；安装包自带 .NET、实际需要的 Swift/VC 运行时及完整许可。
 
 ## 安装与使用
 
@@ -15,7 +15,7 @@ Windows 客户端使用 C# / .NET 10 / Windows Forms，与 macOS 的 Swift / App
 
 从托盘选择“检查更新”，确认后下载 GitHub 最新正式版中对应架构的安装包。严格验证仓库、正式版本、下载地址、大小、SHA-256、ZIP 文件范围、程序版本和架构；不接受 ZIP 中附带的脚本或任意目录。没有可用的 Windows 正式版资源时会提示，不安装 macOS 包或其他架构。
 
-更新助手使用当前程序的副本，校验任务后等待旧进程退出。只替换程序、许可证和第三方声明，其他文件不动；保留 `.backup-*`，替换或启动失败时尝试回滚。只写当前用户可写目录，不自动提权；管理员权限运行时禁用自动更新，避免高权限助手使用用户可写的更新缓存。更新准备目录位于本机应用数据目录，不保存截图。
+更新助手使用当前程序的副本，校验任务后等待旧进程退出。只替换固定清单中的程序、共享核心、运行时和许可证，其他文件不动；保留 `.backup-*`，替换或启动失败时尝试回滚。只写当前用户可写目录，不自动提权；管理员权限运行时禁用自动更新，避免高权限助手使用用户可写的更新缓存。更新准备目录位于本机应用数据目录，不保存截图。
 
 Windows 构建**尚未做 Authenticode 签名**，SmartScreen 可能提示来源不明。仅从本项目 GitHub 正式版下载，核对来源并按系统提示处理；不要关闭 SmartScreen、防病毒或其他系统保护。更新保留互联网来源标记。SHA-256 是完整性检查，不能代替发布者签名，也不能抵御维护者账号被攻破。未来可接入发布者证书，私钥不得提交到仓库。
 
@@ -29,12 +29,12 @@ Windows 构建**尚未做 Authenticode 签名**，SmartScreen 可能提示来源
 
 ## 开发与构建
 
-开发需要 .NET 10 SDK、PowerShell 7；`make` 是统一可选入口，Windows 没有 make 时可直接运行对应 PowerShell 命令。
+Windows 原生开发需要 .NET 10 SDK、Swift 6.3+、Visual Studio C++ 构建工具/Windows SDK 和 PowerShell 7；`make` 是统一可选入口，Windows 没有 make 时可直接运行对应 PowerShell 命令。
 
 ```sh
 make windows-test
 make windows-dev                         # 开发版默认 Ctrl+Alt+2 / 7，与日常版独立
-make windows-build                       # x64 自包含 ZIP
+make windows-build                       # 当前机器架构的自包含 ZIP
 make windows-build WINDOWS_RUNTIME=win-arm64
 ```
 
@@ -43,7 +43,7 @@ make windows-build WINDOWS_RUNTIME=win-arm64
 等价命令：
 
 ```powershell
-dotnet run --project platforms/windows/Screenshot.Tests -c Release
+./scripts/test-windows.ps1
 ./scripts/build-windows.ps1 -Development -Launch
 ./scripts/build-windows.ps1 -Runtime win-x64
 ./scripts/build-windows.ps1 -Runtime win-arm64
@@ -57,7 +57,9 @@ Windows CI 在 x64 runner 和原生 Windows 11 ARM64 runner 上构建并运行�
 - 两个不同版本的临时副本走真实更新助手，检查旧进程退出、安装替换、备份和新进程启动。测试仅正常确认已核对进程/文件哈希的临时程序来源提示，不更改安全复选框、SmartScreen、系统信任或真实安装。
 - 连续执行开发构建并重启同一工作区的开发副本。
 
-CI 不代表真实浏览器、微信、Codex 以及多显示器组合全部验收。第一个 Windows 正式版尚未发布时，也不能宣称已验证线上正式版到正式版的更新。
+CI 不代表真实浏览器、微信、Codex 以及多显示器组合全部验收。macOS/Linux 可用 `python3 scripts/test-shared-core.py` 验证 .NET 适配真实调用 Swift 核心；此命令需要本机 Swift 和 .NET SDK。
+
+第一个 Windows 正式版尚未发布时，也不能宣称已验证线上正式版到正式版的更新。
 
 发布标签后，两平台构建全部成功才创建 Release，官网随后部署。Windows 自动更新使用带版本名 ZIP 及每架构校验清单，官网固定名下载入口另保留一个内容相同的 ZIP。
 

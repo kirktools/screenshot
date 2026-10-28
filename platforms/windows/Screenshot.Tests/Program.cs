@@ -2,7 +2,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Screenshot.Core;
+using Screenshot.Adapters;
 int count = 0;
 void Check(bool condition, string name) { if (!condition) throw new Exception("FAIL: " + name); Console.WriteLine("PASS: " + name); count++; }
 void Reject(Action action, string name) { try { action(); } catch (InvalidDataException) { Check(true, name); return; } throw new Exception("Accepted invalid input: " + name); }
@@ -27,22 +27,23 @@ byte[] Release(string archiveUrl, bool pre = false) => JsonSerializer.SerializeT
 Check(ReleaseUpdates.Parse(Release("https://github.com/kirktools/screenshot/releases/download/v9.0.0/" + name), new(1, 0, 0), "x64")!.Version == new Version(9, 0, 0), "official platform-specific update offer");
 Check(ReleaseUpdates.Parse(Release("ignored", true), new(1, 0, 0), "x64") == null, "prerelease ignored");
 Reject(() => ReleaseUpdates.Parse(Release("https://example.invalid/evil.zip"), new(1, 0, 0), "x64"), "foreign release asset refused");
-byte[] Zip(string[] files)
+byte[] Zip(IEnumerable<string> files)
 {
     using var stream = new MemoryStream(); using (var zip = new ZipArchive(stream, ZipArchiveMode.Create, true)) foreach (var file in files) { using var target = zip.CreateEntry(file).Open(); target.Write(Encoding.UTF8.GetBytes("synthetic fixture")); }
     return stream.ToArray();
 }
-var valid = Zip(["Screenshot.exe", "LICENSE.txt", "ThirdPartyNotices.txt"]); string hash = Convert.ToHexString(SHA256.HashData(valid));
+var valid = Zip(PortableInstall.Files); string hash = Convert.ToHexString(SHA256.HashData(valid));
 ReleaseUpdates.VerifyChecksum(valid, hash + "  " + name, name); Check(true, "checksum accepted");
 Reject(() => ReleaseUpdates.VerifyChecksum(valid, new string('0', 64) + "  " + name, name), "tampered checksum refused");
 Reject(() => ReleaseUpdates.VerifyChecksum(valid, $"{hash}  {name}\n{hash}  {name}", name), "duplicate checksum refused");
 string temp = Path.Combine(Path.GetTempPath(), "screenshot-test-" + Guid.NewGuid().ToString("N"));
 try
 {
-    ReleaseUpdates.Extract(valid, temp); Check(Directory.GetFiles(temp).Length == 3, "portable package extracted"); Directory.Delete(temp, true);
-    Reject(() => ReleaseUpdates.Extract(Zip(["../Screenshot.exe", "LICENSE.txt", "ThirdPartyNotices.txt"]), temp), "ZIP traversal refused");
-    Reject(() => ReleaseUpdates.Extract(Zip(["Screenshot.exe", "LICENSE.txt", "run.ps1"]), temp), "executable script in package refused");
-    Reject(() => ReleaseUpdates.Extract(Zip(["Screenshot.exe", "Screenshot.exe", "LICENSE.txt"]), temp), "duplicate entry refused");
+    ReleaseUpdates.Extract(valid, temp); Check(Directory.GetFiles(temp).Length == PortableInstall.Files.Count, "portable package extracted"); Directory.Delete(temp, true);
+    Reject(() => ReleaseUpdates.Extract(Zip(PortableInstall.Files.Select(n => n == "Screenshot.exe" ? "../Screenshot.exe" : n)), temp), "ZIP traversal refused");
+    Reject(() => ReleaseUpdates.Extract(Zip(PortableInstall.Files.Where(n => n != "StitchCoreABI.dll")), temp), "missing shared native core refused");
+    Reject(() => ReleaseUpdates.Extract(Zip(PortableInstall.Files.Concat(["run.ps1"])), temp), "executable script in package refused");
+    Reject(() => ReleaseUpdates.Extract(Zip(PortableInstall.Files.Concat(["Screenshot.exe"])), temp), "duplicate entry refused");
 }
 finally { if (Directory.Exists(temp)) Directory.Delete(temp, true); }
 string install = Path.Combine(Path.GetTempPath(), "screenshot-install-" + Guid.NewGuid().ToString("N"));
@@ -51,6 +52,10 @@ try
 {
     Directory.CreateDirectory(install); Directory.CreateDirectory(candidate);
     foreach (string file in PortableInstall.Files) { File.WriteAllText(Path.Combine(install, file), "old"); File.WriteAllText(Path.Combine(candidate, file), "new"); }
+    string digest = PortableInstall.Digest(candidate);
+    File.WriteAllText(Path.Combine(candidate, "swiftCore.dll"), "modified runtime");
+    Check(PortableInstall.Digest(candidate) != digest, "whole-bundle digest detects native runtime modification");
+    File.WriteAllText(Path.Combine(candidate, "swiftCore.dll"), "new");
     File.WriteAllText(Path.Combine(install, "personal.txt"), "preserve");
     try { PortableInstall.Replace(install, candidate, () => throw new IOException("synthetic launch failure")); throw new Exception("rollback did not throw"); } catch (IOException) { }
     Check(PortableInstall.Files.All(file => File.ReadAllText(Path.Combine(install, file)) == "old"), "failed launch rolls back all installed files");
@@ -97,6 +102,13 @@ using (var client = new ReleaseClient(new FakeHttp(_ => new HttpResponseMessage(
     using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
     try { await client.Download(new("https://github.com/fixture"), 10, cancellation.Token); throw new Exception("cancel ignored"); }
     catch (OperationCanceledException) { Check(true, "download cancellation preserved"); }
+}
+Check(StitchNative.Match([1], 1, int.MaxValue, int.MaxValue, int.MaxValue, [1], 1, 1, 1, 1, out _) == -1, "shared ABI rejects invalid dimensions before reading buffers");
+Check(StitchNative.Match([1], 0, 1, 1, 1, [1], 1, 1, 1, 1, out _) == -1, "shared ABI rejects buffer length mismatch");
+using (var handle = new StitchHandle())
+{
+    Check(StitchNative.Reset(handle, null, 1, 1, 1, 1) == -1, "shared ABI rejects invalid optional anchor");
+    Check(StitchNative.Consume(handle, [1], 1, 1, 1, 1, double.NaN, out _, out _) == -1, "shared ABI rejects invalid timestamps");
 }
 Console.WriteLine($"{count} checks passed");
 sealed class FakeHttp(Func<HttpRequestMessage, HttpResponseMessage> send) : HttpMessageHandler

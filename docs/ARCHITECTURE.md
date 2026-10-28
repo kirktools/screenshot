@@ -40,11 +40,26 @@ ContinuousStitchTracker 不要求停稳：每帧都可与最后确认帧匹配�
 
 ## Windows 与工具集
 
-Windows 客户端位于 `platforms/windows/`：`Screenshot.Core` 保存纯 .NET 的亮度帧匹配、恢复状态机和更新包安全协议，`Screenshot.Windows` 保存 Windows Forms、GDI、RegisterHotKey、剪贴板和安装助手。Swift/C# 消费同一份 `Tests/Fixtures/stitch-vectors.json` 作为匹配契约；两者是需要同步维护的实现，不是跨语言 ABI。macOS 的 CGImage/CGRect 不暴露给 Windows。
+应用按共享核心、平台适配和原生界面分层：
+
+```text
+Sources/StitchCore                      唯一的匹配算法与连续恢复状态机
+ ├─ macOS：Swift 直接调用
+ └─ platforms/interop/StitchCoreABI.swift 版本化 C ABI、输入验证和句柄生命周期
+      └─ Windows Screenshot.Adapters    .NET 数据封送和 SafeHandle
+           └─ Screenshot.Windows        原生界面及会话调度
+                └─ Platform/            GDI、Win32 快捷键等系统适配
+```
+
+共享核心不引用 Foundation、AppKit、CoreGraphics 或 Windows API，不访问屏幕、剪贴板、文件或网络。macOS 和 Windows 编译同一份 Swift 源码；Windows 没有算法或恢复状态机的 C# 副本。共享向量同时验证直接调用和跨语言调用，避免参数映射、错误码或资源生命周期造成差异。
+
+C 接口见 `platforms/interop/include/screenshot_stitch.h`：只传规范化亮度帧、时间、整数结果和不透明会话句柄，不传原生图片或窗口对象。帧缓冲区在调用期间借用，核心自行复制保留的锚点；同一会话串行调用。.NET 使用 SafeHandle 保证进行中的原生调用完成前不会释放会话，ABI 版本不匹配时拒绝启动。Windows 的 Swift 编译器与运行时固定版本；只打包实际导入的运行时 DLL 和完整许可，不要求终端用户安装 SDK。
+
+系统差异保留在适配层：采集 API、坐标/DPI、全局快捷键、系统权限、剪贴板、文件对话框和安装更新。各平台的像素分配限额与原生渲染也留在对应适配器；截图匹配与恢复规则只在共享核心修改。原生 UI 根据共享结果显示状态和执行用户动作。Windows 的 ReleaseUpdates / PortableInstall 是 Windows 包协议适配服务，不能套用 macOS 的 .app、Developer ID 或 TCC 规则。
 
 Windows 以单次在途帧限制后台采集/匹配，确认新内容后只保留新增条带和亮度锚点；上限与桌面验收范围见 [Windows 文档](WINDOWS.md)。边框穿透鼠标，预览无激活能力并放在选区外；同时申请系统窗口采集排除标记，不把排除标记当作安全屏障。普通截图在显示覆盖层前冻结虚拟桌面。
 
-Windows 的 portable 更新协议只接受固定文件清单，校验版本、架构和 SHA-256 后由当前程序副本执行；原进程退出后才替换文件，保留备份，失败回滚。安装助手、系统信任和窗口接口保持各平台独立。
+Windows 的 portable 更新协议只接受 package-files.json 的固定文件清单，校验版本、架构、下载包 SHA-256 和候选完整组件摘要后由当前程序副本执行；原进程退出后才替换文件，共享核心、运行时及许可随程序一起备份和替换，失败回滚。安装助手、系统信任和窗口接口保持各平台独立。
 
 工具宿主已用 `screenshot.region`、`screenshot.scroll` 等稳定命名注册快捷键；未来可把菜单元数据、设置、生命周期包装为 ToolDescriptor/ToolModule，再增加取色、文本处理等模块。无需现在就引入插件加载器、脚本权限或共享网络服务。截图编辑和拼接状态不得变成所有工具共用的全局变量。
 

@@ -1,0 +1,9 @@
+{
+  "format": 1,
+  "required": [
+    "Screenshot.exe", "LICENSE.txt", "ThirdPartyNotices.txt",
+    "StitchCoreABI.dll", "swiftCore.dll", "MSVCP140.dll", "VCRUNTIME140.dll",
+    "Swift-LICENSE.txt", "Microsoft-VC-Runtime-LICENSE.txt"
+  ],
+  "optional": ["VCRUNTIME140_1.dll"]
+}

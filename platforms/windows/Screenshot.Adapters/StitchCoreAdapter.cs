@@ -1,4 +1,4 @@
-namespace Screenshot.Core;
+namespace Screenshot.Adapters;
 
 public sealed record GrayFrame
 {
@@ -16,6 +16,7 @@ public enum MatchKind { Duplicate, Append, Reverse, IncompatibleSize, Insufficie
 public readonly record struct MatchResult(MatchKind Kind, int Rows = 0);
 
 // 适配层只负责数据封送；匹配与恢复规则均执行 Sources/StitchCore 的原始实现。
+public static class SharedStitchCore { public static void Validate() { _ = StitchNative.Version(); } }
 public sealed class StitchMatcher
 {
     public double Difference(GrayFrame a, GrayFrame b)
@@ -35,17 +36,21 @@ public enum TrackingKind { Seed, Append, Duplicate, Recovering, Paused }
 public readonly record struct TrackingResult(TrackingKind Kind, MatchResult Match);
 public sealed class StitchTracker : IDisposable
 {
-    readonly StitchHandle handle = new();
-    public bool HasUnmatchedFrame => StitchNative.Unmatched(handle) switch { 0 => false, 1 => true, _ => throw new ObjectDisposedException(nameof(StitchTracker)) };
+    readonly StitchHandle handle = new(); readonly object gate = new();
+    public bool HasUnmatchedFrame { get { lock (gate) return StitchNative.Unmatched(handle) switch { 0 => false, 1 => true, _ => throw new ObjectDisposedException(nameof(StitchTracker)) }; } }
     public void Reset(GrayFrame? frame = null)
     {
+        lock (gate) {
         if (StitchNative.Reset(handle, frame?.Pixels, frame?.Pixels.Length ?? 0, frame?.Width ?? 0, frame?.Height ?? 0, frame?.SourceWidth ?? 0) != 0) throw new ArgumentException("共享核心拒绝了锚点");
+        }
     }
     public TrackingResult Consume(GrayFrame frame, double time)
     {
+        lock (gate) {
         int kind = StitchNative.Consume(handle, frame.Pixels, frame.Pixels.Length, frame.Width, frame.Height, frame.SourceWidth, time, out int match, out int rows);
         if (kind < 0 || kind > 4 || match < 0 || match > 6) throw new ArgumentException("共享核心拒绝了亮度帧或时间");
         return new((TrackingKind)kind, new((MatchKind)match, rows));
+        }
     }
     public void Dispose() => handle.Dispose();
 }

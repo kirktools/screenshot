@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-namespace Screenshot.Core;
+namespace Screenshot.Adapters;
 
 public sealed record UpdateOffer(Version Version, string Tag, Uri Page, string ArchiveName, Uri Archive, Uri Checksums);
 public static class ReleaseUpdates
@@ -46,8 +46,8 @@ public static class ReleaseUpdates
         if (bytes.Length > MaximumArchiveBytes) throw new InvalidDataException("更新包过大");
         using var archive = new ZipArchive(new MemoryStream(bytes));
         var files = archive.Entries.Where(e => !e.FullName.EndsWith('/')).ToArray();
-        string[] allowed = ["Screenshot.exe", "LICENSE.txt", "ThirdPartyNotices.txt"];
-        if (files.Length != 3 || files.Select(e => e.FullName).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 3 || files.Any(e => !allowed.Contains(e.FullName, StringComparer.Ordinal))) throw new InvalidDataException("安装包目录结构不符合约束，已拒绝解压");
+        var allowed = PortableInstall.Files.Concat(PortableInstall.OptionalFiles).ToArray();
+        if (files.Length < PortableInstall.Files.Count || files.Length > allowed.Length || files.Select(e => e.FullName).Distinct(StringComparer.OrdinalIgnoreCase).Count() != files.Length || files.Any(e => !allowed.Contains(e.FullName, StringComparer.OrdinalIgnoreCase)) || PortableInstall.Files.Any(n => !files.Any(e => e.FullName.Equals(n, StringComparison.OrdinalIgnoreCase)))) throw new InvalidDataException("安装包目录结构不符合约束，已拒绝解压");
         if (files.Sum(e => e.Length) > MaximumExpandedBytes || files.Any(e => ((e.ExternalAttributes >> 16) & 0xF000) == 0xA000)) throw new InvalidDataException("安装包超过资源上限或包含链接");
         Directory.CreateDirectory(destination);
         foreach (var entry in files)

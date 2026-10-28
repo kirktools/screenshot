@@ -1,6 +1,6 @@
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
-using Screenshot.Core;
+using Screenshot.Adapters;
 namespace Screenshot.Windows;
 
 // 仅在隔离 CI 桌面运行：只读取自身生成的无敏感内容窗口，不导出真实桌面帧。

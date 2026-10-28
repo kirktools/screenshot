@@ -1,12 +1,15 @@
 # Windows 原生构建/便携包；不安装、不提权、不发布。
 [CmdletBinding()]
 param(
-    [ValidateSet('win-x64','win-arm64')][string]$Runtime = 'win-x64',
+    [ValidateSet('auto','win-x64','win-arm64')][string]$Runtime = 'auto',
     [switch]$Development,
     [switch]$Launch
 )
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path $PSScriptRoot -Parent)
+if ($Runtime -eq 'auto') { $Runtime = if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'win-arm64' } else { 'win-x64' } }
+$core = [IO.Path]::GetFullPath(".build/windows/shared-core/$Runtime")
+if (!$env:SharedCoreDirectory -or $env:SharedCoreDirectory -ne $core -or !(Test-Path (Join-Path $core 'StitchCoreABI.dll'))) { & "$PSScriptRoot/build-stitch-core.ps1" -Runtime $Runtime }
 $version = (Get-Content VERSION -Raw).Trim()
 if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'VERSION 必须为 x.y.z' }
 $flavor = if ($Development) { 'development' } else { 'release' }
@@ -26,7 +29,7 @@ if ($Development -and $Launch) {
 }
 # 输出路径仅由受限参数组成，不清理工作区其他目录。
 if (Test-Path $output) { Remove-Item $output -Recurse -Force }
-$publish = @('publish','platforms/windows/Screenshot.Windows/Screenshot.Windows.csproj','-c','Release','-r',$Runtime,'--self-contained','true','-o',$output,'-p:ContinuousIntegrationBuild=true','-p:DebugType=None','-p:DebugSymbols=false')
+$publish = @('publish','platforms/windows/Screenshot.Windows/Screenshot.Windows.csproj','-c','Release','-r',$Runtime,'--self-contained','true','-o',$output,'-p:ContinuousIntegrationBuild=true','-p:DebugType=None','-p:DebugSymbols=false',"-p:SharedCoreDirectory=$core")
 if ($Development) { $publish += '-p:DefineConstants=DEVELOPMENT' }
 & dotnet @publish
 if ($LASTEXITCODE -ne 0) { throw 'Windows 应用构建失败' }
@@ -36,9 +39,10 @@ $notices = Join-Path $sdkRoot 'ThirdPartyNotices.txt'
 $runtimeLicense = Join-Path $sdkRoot 'LICENSE.txt'
 if (!(Test-Path $notices) -or !(Test-Path $runtimeLicense)) { throw 'SDK 缺少第三方声明，拒绝生成不完整安装包' }
 [IO.File]::WriteAllText((Join-Path (Resolve-Path $output) 'ThirdPartyNotices.txt'), ([IO.File]::ReadAllText($runtimeLicense) + "`n`n" + [IO.File]::ReadAllText($notices)))
-$expected = @('LICENSE.txt','Screenshot.exe','ThirdPartyNotices.txt')
-$actual = @(Get-ChildItem $output -File | Select-Object -ExpandProperty Name | Sort-Object)
-if (Compare-Object $expected $actual) { throw '单文件便携包存在非预期文件，请检查发布配置' }
+$specification = Get-Content platforms/windows/package-files.json -Raw | ConvertFrom-Json
+$allowed = @($specification.required) + @($specification.optional)
+$actual = @(Get-ChildItem $output -File | Select-Object -ExpandProperty Name)
+if (@($specification.required | Where-Object { $_ -notin $actual }).Count -or @($actual | Where-Object { $_ -notin $allowed }).Count) { throw '便携包缺少组件或包含非预期文件，请检查发布配置' }
 if ($Development) {
     if ($Launch) { Start-Process (Join-Path (Resolve-Path $output) 'Screenshot.exe') }
     Write-Host "开发版已生成：$output"

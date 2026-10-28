@@ -5,10 +5,10 @@ using System.Text;
 using System.Text.Json;
 using System.Security;
 using System.Security.Principal;
-using Screenshot.Core;
+using Screenshot.Adapters;
 namespace Screenshot.Windows;
 
-internal sealed record UpdatePlan(string InstallDirectory, int ProcessId, string OldHash, string NewHash, string Version);
+internal sealed record UpdatePlan(string InstallDirectory, int ProcessId, string OldHash, string NewHash, string Version, string BundleHash);
 internal static class Updates
 {
     static readonly string Root = Path.Combine(Preferences.Folder, "updates");
@@ -80,7 +80,7 @@ internal static class Updates
             }
             string currentExe = Path.Combine(install, "Screenshot.exe"), helper = Path.Combine(directory, "Screenshot.Update.exe");
             File.Copy(currentExe, helper);
-            var plan = new UpdatePlan(install, Environment.ProcessId, Hash(currentExe), Hash(candidateExe), offer.Version.ToString());
+            var plan = new UpdatePlan(install, Environment.ProcessId, Hash(currentExe), Hash(candidateExe), offer.Version.ToString(), PortableInstall.Digest(candidate));
             File.WriteAllText(Path.Combine(directory, "plan.json"), JsonSerializer.Serialize(plan));
             var start = new ProcessStartInfo(helper) { UseShellExecute = false }; start.ArgumentList.Add("--apply-update"); start.ArgumentList.Add(directory);
             Process.Start(start)?.Dispose();
@@ -101,7 +101,7 @@ internal static class Updates
             plan = JsonSerializer.Deserialize<UpdatePlan>(File.ReadAllText(Path.Combine(directory, "plan.json"))) ?? throw new InvalidDataException("更新任务无效");
             string install = Path.GetFullPath(plan.InstallDirectory), candidate = Path.Combine(directory, "candidate");
             string oldExe = Path.Combine(install, "Screenshot.exe"), newExe = Path.Combine(candidate, "Screenshot.exe");
-            if (Hash(oldExe) != plan.OldHash || Hash(newExe) != plan.NewHash || Hash(Environment.ProcessPath!) != plan.OldHash) throw new InvalidDataException("更新文件已变化，已取消");
+            if (Hash(oldExe) != plan.OldHash || Hash(newExe) != plan.NewHash || Hash(Environment.ProcessPath!) != plan.OldHash || PortableInstall.Digest(candidate) != plan.BundleHash) throw new InvalidDataException("更新文件已变化，已取消");
             File.WriteAllText(Path.Combine(directory, "ready"), "ready");
             try
             {
@@ -115,7 +115,7 @@ internal static class Updates
             }
             catch (ArgumentException) { }
             if (File.Exists(Path.Combine(directory, "cancelled"))) return 0;
-            if (Hash(oldExe) != plan.OldHash || Hash(newExe) != plan.NewHash) throw new InvalidDataException("更新文件在等待期间已变化，未覆盖");
+            if (Hash(oldExe) != plan.OldHash || Hash(newExe) != plan.NewHash || PortableInstall.Digest(candidate) != plan.BundleHash) throw new InvalidDataException("更新文件在等待期间已变化，未覆盖");
             phase = "replace";
             PortableInstall.Replace(install, candidate, () =>
             {

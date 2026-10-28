@@ -19,7 +19,7 @@ internal static class Program
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000)) { MessageBox.Show("此版本需要 Windows 11 或更新系统。", "Screenshot"); return 1; }
         using var instance = new Mutex(true, @"Local\kirktools." + Profile.Name.Replace(" ", ""), out bool first);
         if (!first) { MessageBox.Show("Screenshot 已在系统托盘运行。", "Screenshot"); return 0; }
-        try { using var app = new ScreenshotContext(); if (args is ["--update-started", var directory]) Updates.MarkStarted(directory); Application.Run(app); return 0; }
+        try { Screenshot.Adapters.SharedStitchCore.Validate(); using var app = new ScreenshotContext(); if (args is ["--update-started", var directory]) Updates.MarkStarted(directory); Application.Run(app); return 0; }
         catch (Exception error) { if (UpdateProcessFixture.Root is { } root) File.WriteAllText(Path.Combine(root, "error.txt"), "startup: " + error.GetType().Name + ": " + error.Message); MessageBox.Show("启动失败。请把完整安装包解压到可写目录后运行；不要直接在 ZIP 中启动。", "Screenshot"); return 1; }
     }
 }

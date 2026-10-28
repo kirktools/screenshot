@@ -1,5 +1,5 @@
 <Project>
   <ItemGroup Condition="'$(SharedCoreDirectory)' != ''">
-    <None Include="$(SharedCoreDirectory)/*" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true"/>
+    <None Include="$(SharedCoreDirectory)/*.dll;$(SharedCoreDirectory)/*.dylib;$(SharedCoreDirectory)/*.so;$(SharedCoreDirectory)/*LICENSE.txt" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true"/>
   </ItemGroup>
 </Project>

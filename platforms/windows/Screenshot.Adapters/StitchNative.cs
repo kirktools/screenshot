@@ -1,5 +1,5 @@
 using System.Runtime.InteropServices;
-namespace Screenshot.Core;
+namespace Screenshot.Adapters;
 
 internal sealed class StitchHandle : SafeHandle
 {

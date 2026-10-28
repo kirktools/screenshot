@@ -7,6 +7,16 @@ internal static class WindowsSelfTest
     {
         try
         {
+            Screenshot.Adapters.SharedStitchCore.Validate();
+            using (var process = System.Diagnostics.Process.GetCurrentProcess())
+            {
+                foreach (System.Diagnostics.ProcessModule module in process.Modules)
+                    if ((module.ModuleName.Equals("StitchCoreABI.dll", StringComparison.OrdinalIgnoreCase) || module.ModuleName.Equals("swiftCore.dll", StringComparison.OrdinalIgnoreCase)) &&
+                        (module.FileName.Contains(@"\Programs\Swift\", StringComparison.OrdinalIgnoreCase) || module.FileName.Contains(@"\Library\Developer\", StringComparison.OrdinalIgnoreCase)))
+                        throw new Exception("共享核心意外依赖了开发 SDK 路径");
+            }
+            Console.WriteLine("PASS: packaged shared Swift core loaded independently of the developer SDK");
+
             int uiThread = Environment.CurrentManagedThreadId; bool notified = false;
             using (var displays = new SystemEventsBridge(() => { if (Environment.CurrentManagedThreadId != uiThread) throw new Exception("显示事件未返回 UI 线程"); notified = true; }))
             {

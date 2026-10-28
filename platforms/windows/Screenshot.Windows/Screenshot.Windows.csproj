@@ -6,5 +6,5 @@
 <PublishSingleFile>true</PublishSingleFile><IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
 <SelfContained>true</SelfContained><PublishTrimmed>false</PublishTrimmed>
 </PropertyGroup>
-<ItemGroup><ProjectReference Include="../Screenshot.Core/Screenshot.Core.csproj"/></ItemGroup>
+<ItemGroup><ProjectReference Include="../Screenshot.Adapters/Screenshot.Adapters.csproj"/></ItemGroup>
 </Project>

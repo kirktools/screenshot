@@ -1,3 +1,4 @@
+using Screenshot.Adapters;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
@@ -21,7 +22,7 @@ internal static class Program
         try
         {
             Directory.CreateDirectory(install); Directory.CreateDirectory(candidate);
-            foreach (string file in new[] { "Screenshot.exe", "LICENSE.txt", "ThirdPartyNotices.txt" })
+            foreach (string file in PortableInstall.CandidateFiles(args[0]))
             {
                 File.Copy(Path.Combine(args[0], file), Path.Combine(install, file));
                 File.Copy(file == "Screenshot.exe" ? args[1] : Path.Combine(args[0], file), Path.Combine(candidate, file));

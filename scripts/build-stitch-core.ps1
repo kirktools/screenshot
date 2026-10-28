@@ -18,7 +18,8 @@ foreach ($line in $environment) {
 }
 $output = [IO.Path]::GetFullPath(".build/windows/shared-core/$Runtime")
 New-Item $output -ItemType Directory -Force | Out-Null
-& swiftc -O -emit-library -module-name StitchCoreABI -debug-prefix-map "$PWD=/_/screenshot" Sources/StitchCore/StitchMatcher.swift Sources/StitchCore/ContinuousStitchTracker.swift platforms/interop/StitchCoreABI.swift -o (Join-Path $output 'StitchCoreABI.dll')
+$sources = @(Get-ChildItem Sources/StitchCore -Filter '*.swift' | Sort-Object Name | Select-Object -ExpandProperty FullName)
+& swiftc -O -emit-library -module-name StitchCoreABI -debug-prefix-map "$PWD=/_/screenshot" @sources platforms/interop/StitchCoreABI.swift -o (Join-Path $output 'StitchCoreABI.dll')
 if ($LASTEXITCODE -ne 0) { throw '共享 Swift 核心编译失败' }
 # 递归收集实际导入的 Swift/CRT DLL；不把整个 SDK 或 Foundation 打进应用。
 $swiftRoot = Join-Path $env:LOCALAPPDATA 'Programs/Swift'
@@ -48,8 +49,5 @@ Get-ChildItem $output -File | Where-Object { $_.Extension -ne '.dll' } | Remove-
 $dlls = @(Get-ChildItem $output -Filter '*.dll')
 Write-Host ("共享核心依赖：" + (($dlls | Select-Object -ExpandProperty Name) -join ', '))
 Write-Host ("共享核心与运行时字节：" + (($dlls | Measure-Object Length -Sum).Sum))
-# 只诊断 SDK 许可证相对文件名，后续完整随包附带。
-foreach ($root in $roots) {
-    Get-ChildItem $root -File -Recurse -Include '*LICENSE*','*NOTICE*' -ErrorAction SilentlyContinue | Select-Object -First 20 | ForEach-Object { Write-Host ("SDK license: " + [IO.Path]::GetRelativePath($root,$_.FullName)) }
-}
+Copy-Item third_party/Swift-LICENSE.txt,third_party/Microsoft-VC-Runtime-LICENSE.txt $output -Force
 if ($env:GITHUB_ENV) { "SharedCoreDirectory=$output" | Out-File $env:GITHUB_ENV -Append -Encoding utf8 }

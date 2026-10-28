@@ -1,4 +1,4 @@
-using Screenshot.Core;
+using Screenshot.Adapters;
 namespace Screenshot.Windows;
 
 internal enum FinishMode { Copy, Edit, Save }
