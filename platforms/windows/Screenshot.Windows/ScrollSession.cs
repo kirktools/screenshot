@@ -14,11 +14,13 @@ internal sealed class ScrollSession : IDisposable
     internal Rectangle PreviewBounds => panel.Bounds;
     internal bool Released => disposed && panel.IsDisposed && boundary.IsDisposed && segments.Count == 0;
     internal bool InFlight => processing;
+    internal string Diagnostic => $"processing={processing};blocked={blocked};error={panel.CurrentError}";
     internal void UndoLast() => Undo();
     public Action? Closed;
     static string DisplayLayout() => string.Join(";", Screen.AllScreens.Select(s => $"{s.DeviceName}:{s.Bounds}"));
     public ScrollSession(Rectangle region, Func<Bitmap, FinishMode, bool> output)
     {
+        IntPtr target = Native.GetForegroundWindow();
         this.region = region; this.output = output;
         var space = FindPanelSpace(region) ?? throw new InvalidOperationException("选区外没有足够空间显示长图预览。请缩小选区或为预览留出侧边空间。");
         panel = new PreviewPanel(space, DrawPreview);
@@ -27,6 +29,9 @@ internal sealed class ScrollSession : IDisposable
         try
         {
             boundary.Show(); panel.Show();
+            // WinForms 在初始化顶层窗口时仍可能选择活动控件；显式维持调用前的目标。
+            if (target != IntPtr.Zero && Native.GetForegroundWindow() != target && !Native.SetForegroundWindow(target))
+                throw new InvalidOperationException("无法保留目标窗口的滚动焦点，请回到目标应用后重试。");
             if (!Native.SetWindowDisplayAffinity(boundary.Handle, 0x11) || !Native.SetWindowDisplayAffinity(panel.Handle, 0x11)) throw new InvalidOperationException("系统无法排除截图控件，请关闭远程/受保护桌面后重试。");
             timer.Tick += async (_, _) => await Tick(); timer.Start();
         }
@@ -135,6 +140,7 @@ internal sealed class PreviewPanel : Form
     public event Action<FinishMode>? Finish; public event Action? Cancel, Undo, Retry;
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public string? Error { set { error.Text = value ?? ""; error.Visible = !string.IsNullOrEmpty(value); error.BringToFront(); } }
+    internal string CurrentError => error.Text;
     public PreviewPanel(Rectangle bounds, Action<Graphics, Rectangle, int> draw)
     {
         SetStyle(ControlStyles.Selectable, false); TabStop = false;

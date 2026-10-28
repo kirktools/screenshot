@@ -43,11 +43,11 @@ internal static class DesktopSelfTest
         finally { image.UnlockBits(data); }
         return image;
     }
-    static async Task Wait(Func<bool> condition, string name)
+    static async Task Wait(Func<bool> condition, string name, Func<string>? detail = null)
     {
         var deadline = DateTime.UtcNow.AddSeconds(12);
         while (!condition())
-        { if (DateTime.UtcNow > deadline) throw new InvalidOperationException(name + "超时"); await Task.Delay(20); }
+        { if (DateTime.UtcNow > deadline) throw new InvalidOperationException(name + "超时 " + detail?.Invoke()); await Task.Delay(20); }
     }
     static async Task RunSession(Fixture fixture, Bitmap document)
     {
@@ -80,7 +80,7 @@ internal static class DesktopSelfTest
         using var session = new ScrollSession(region, (image, _) => { result = (Bitmap)image.Clone(); return true; });
         if (Native.GetForegroundWindow() != fixture.Handle) throw new InvalidOperationException("长图控件抢走了目标窗口焦点");
         if (session.PreviewBounds.IntersectsWith(region)) throw new InvalidOperationException("预览进入了采集区域");
-        await Wait(() => session.CapturedHeight == region.Height, "采集首帧");
+        await Wait(() => session.CapturedHeight == region.Height, "采集首帧", () => session.Diagnostic);
         using (var capture = Capture.ScreenImage(region))
         using (var expected = Capture.Crop(document, new(Point.Empty, region.Size)))
             if (new StitchMatcher().Difference(Capture.Gray(capture), Capture.Gray(expected)) > .1)
