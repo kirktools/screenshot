@@ -94,6 +94,28 @@ class SigningTests(unittest.TestCase):
                 create.assert_called_once_with(state / 'release', 'Screenshot Release Signing')
                 remote.assert_not_called()
 
+    def test_codesign_failure_keeps_safe_system_reason_without_private_details(self):
+        result = subprocess.CompletedProcess([], 1, '',
+            '/private/fixture/secret-name.app: errSecInternalComponent\n'
+            'Warning: unable to build chain to self-signed root for signer "synthetic-secret"')
+        with mock.patch.object(signing.subprocess, 'run', return_value=result):
+            with self.assertRaises(RuntimeError) as caught:
+                signing.run(['/usr/bin/codesign', '--sign', 'synthetic-secret', '/private/fixture/secret-name.app'])
+        message = str(caught.exception)
+        self.assertIn('errSecInternalComponent', message)
+        self.assertIn('证书链', message)
+        for private in ['synthetic-secret', '/private/fixture', 'secret-name.app']:
+            self.assertNotIn(private, message)
+
+    def test_unknown_codesign_failure_reports_exit_code_only(self):
+        result = subprocess.CompletedProcess([], 7, '', 'synthetic-secret /private/fixture')
+        with mock.patch.object(signing.subprocess, 'run', return_value=result):
+            with self.assertRaises(RuntimeError) as caught:
+                signing.run(['/usr/bin/codesign', 'synthetic-secret'])
+        self.assertIn('7', str(caught.exception))
+        self.assertNotIn('synthetic-secret', str(caught.exception))
+        self.assertNotIn('/private/fixture', str(caught.exception))
+
     def test_security_failure_does_not_echo_secret_arguments(self):
         result = subprocess.CompletedProcess([], 1, '', 'synthetic-secret')
         with mock.patch.object(signing.subprocess, 'run', return_value=result):

@@ -1,0 +1,38 @@
+name: Signing check
+# 独立诊断发布签名，不创建 Release、不部署官网、不安装应用。
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  signing:
+    if: github.repository == 'kirktools/screenshot' && github.ref == 'refs/heads/master'
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: 校验签名策略及公开内容
+        run: |
+          python3 scripts/test-signing.py
+          python3 scripts/check-public-content.py
+      - name: 导入现有发布身份
+        env:
+          MACOS_SIGNING_KEYCHAIN_BASE64: ${{ secrets.MACOS_SIGNING_KEYCHAIN_BASE64 }}
+          MACOS_SIGNING_PASSWORD: ${{ secrets.MACOS_SIGNING_PASSWORD }}
+        run: python3 scripts/prepare-ci-signing.py
+      - name: 复现正式版的 universal 构建及签名
+        env:
+          UNIVERSAL: '1'
+        run: |
+          scripts/build-app.sh
+          lipo 'dist/Screenshot.app/Contents/MacOS/Screenshot' -verify_arch arm64
+          lipo 'dist/Screenshot.app/Contents/MacOS/Screenshot' -verify_arch x86_64
+      - name: 清理临时钥匙串
+        if: always()
+        run: |
+          keychain="$RUNNER_TEMP/screenshot-signing/release.keychain-db"
+          if [[ -f "$keychain" ]]; then security delete-keychain "$keychain"; fi

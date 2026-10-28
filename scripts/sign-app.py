@@ -20,7 +20,23 @@ def run(args):
     except subprocess.TimeoutExpired:
         raise RuntimeError(f'{Path(args[0]).name} 超时；未输出敏感参数。') from None
     if result.returncode:
-        # 安全工具参数可能含钥匙串密码，不回显命令或其错误输出。
+        if Path(args[0]).name == 'codesign':
+            # 仅提取系统错误码及白名单错误类别，不回显参数、路径、证书名称或原始输出。
+            diagnostic = result.stdout + '\n' + result.stderr
+            reasons = sorted(set(re.findall(r'\b(?:errSec[A-Za-z]+|CSSMERR_[A-Z_]+)\b', diagnostic)))
+            known_reasons = {
+                'unable to build chain to self-signed root': '证书链无法连接到自签名根证书',
+                'User interaction is not allowed': '钥匙串需要交互但 runner 无交互会话',
+                'The specified item could not be found in the keychain': '钥匙串中未找到签名项目',
+                'no identity found': '未找到签名身份',
+                'resource fork, Finder information, or similar detritus not allowed': '应用包包含不允许的扩展属性',
+                'code object is not signed at all': '代码对象未签名',
+                'invalid or unsupported format for signature': '签名格式无效或不支持',
+            }
+            reasons += [label for token, label in known_reasons.items() if token.lower() in diagnostic.lower()]
+            detail = '；'.join([f'退出码 {result.returncode}', *reasons])
+            raise RuntimeError(f'codesign 执行失败（{detail}）；未更换现有签名身份。')
+        # security / openssl 参数可能含密码，其输出仍完全隐藏。
         raise RuntimeError(f'{Path(args[0]).name} 执行失败；未更换现有签名身份。')
     return result.stdout
 
