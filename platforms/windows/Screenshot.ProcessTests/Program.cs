@@ -26,6 +26,8 @@ internal static class Program
             string executable = Path.Combine(install, "Screenshot.exe");
             using (var worker = StandardUserProcess(executable, ["--prepare-update-test", task, candidate]))
             {
+                // GetProcessById 返回的对象必须先保留句柄，退出后仍需读取退出码。
+                using var handle = worker.SafeHandle;
                 if (!worker.WaitForExit(60000)) { worker.Kill(); worker.WaitForExit(5000); throw new Exception("更新准备进程超时"); }
                 if (worker.ExitCode != 0)
                     throw new Exception(File.Exists(Path.Combine(root, "error.txt")) ? File.ReadAllText(Path.Combine(root, "error.txt")) : "更新准备失败");

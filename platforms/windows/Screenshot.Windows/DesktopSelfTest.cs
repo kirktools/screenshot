@@ -55,7 +55,9 @@ internal static class DesktopSelfTest
         using (var capture = Capture.ScreenImage(region))
         using (var expected = Capture.Crop(document, new(Point.Empty, region.Size)))
         {
-            if (new StitchMatcher().Difference(Capture.Gray(capture), Capture.Gray(expected)) > .1)
+            double difference = new StitchMatcher().Difference(Capture.Gray(capture), Capture.Gray(expected));
+            Console.WriteLine($"CAPTURE: dpi={fixture.DeviceDpi}, imageDpi={document.HorizontalResolution}, region={region.Size}, difference={difference:F3}");
+            if (difference > .1)
                 throw new InvalidOperationException("自身测试窗口与 GDI 实际采集不一致，可能存在遮挡、缩放或无交互桌面");
         }
         Console.WriteLine("PASS: actual GDI region capture matches fixture pixels");
@@ -107,12 +109,15 @@ internal static class DesktopSelfTest
         }
         Console.WriteLine("PASS: real desktop scroll session, reverse recovery, undo, full-pixel stitching and resource release");
     }
-    sealed class Fixture(Bitmap document) : Form
+    sealed class Fixture : Form
     {
-        int offset;
-        public Fixture() : this(new Bitmap(1, 1)) { }
-        protected override void OnLoad(EventArgs e)
-        { AutoScaleMode = AutoScaleMode.None; FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; TopMost = true; DoubleBuffered = true; base.OnLoad(e); }
+        readonly Bitmap document; int offset;
+        public Fixture(Bitmap document)
+        {
+            this.document = document;
+            AutoScaleMode = AutoScaleMode.None; FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false; TopMost = true; DoubleBuffered = true; StartPosition = FormStartPosition.Manual;
+        }
         public void ScrollTo(int value) { offset = value; Refresh(); }
         protected override void OnPaint(PaintEventArgs e) => e.Graphics.DrawImageUnscaled(document, 0, -offset);
     }

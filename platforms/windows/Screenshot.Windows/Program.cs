@@ -6,6 +6,7 @@ internal static class Program
     [STAThread]
     static int Main(string[] args)
     {
+        if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true") Console.OutputEncoding = Console.InputEncoding = System.Text.Encoding.UTF8;
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
         if (args is ["--prepare-update-test", var task, var candidate]) return UpdateProcessFixture.Prepare(task, candidate);
         if (args is ["--apply-update", var folder]) return Updates.Apply(folder);
