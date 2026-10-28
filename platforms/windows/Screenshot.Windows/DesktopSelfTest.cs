@@ -74,6 +74,8 @@ internal static class DesktopSelfTest
             if (!second.Register(1, shortcut)) throw new InvalidOperationException("快捷键未释放");
         }
         Console.WriteLine("PASS: native hotkey registration, conflict and release");
+        fixture.BringToFront(); Native.SetForegroundWindow(fixture.Handle);
+        await Wait(() => Native.GetForegroundWindow() == fixture.Handle, "目标窗口恢复前台");
         Bitmap? result = null;
         using var session = new ScrollSession(region, (image, _) => { result = (Bitmap)image.Clone(); return true; });
         if (Native.GetForegroundWindow() != fixture.Handle) throw new InvalidOperationException("长图控件抢走了目标窗口焦点");

@@ -40,7 +40,12 @@ internal static class Program
                 // 验证生产启动确认与实际进程，不依赖 Shell 是否继承 CI 环境变量。
                 if (File.Exists(Path.Combine(task, "started"))) started = FindOwnedProcess(executable);
                 if (started != null) break;
-                if (DateTime.UtcNow > deadline) throw new Exception("新版启动确认超时: " + Diagnostic(root, task));
+                if (DateTime.UtcNow > deadline)
+                {
+                    int pid = int.Parse(File.ReadAllText(Path.Combine(root, "helper.pid")));
+                    Console.Error.WriteLine("OWN HELPER WINDOWS: " + HelperWindows(pid));
+                    throw new Exception("新版启动确认超时: " + Diagnostic(root, task));
+                }
                 Thread.Sleep(100);
             }
             using (started)
@@ -68,6 +73,25 @@ internal static class Program
             try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch (IOException) { }
         }
     }
+    static string HelperWindows(int pid)
+    {
+        var titles = new List<string>();
+        EnumWindows((window, _) =>
+        {
+            GetWindowThreadProcessId(window, out uint owner);
+            if (owner != pid || !IsWindowVisible(window)) return true;
+            var title = new StringBuilder(256); GetWindowText(window, title, title.Capacity);
+            var type = new StringBuilder(100); GetClassName(window, type, type.Capacity);
+            titles.Add(type + ":" + title); return true;
+        }, IntPtr.Zero);
+        return string.Join(" | ", titles);
+    }
+    delegate bool EnumWindow(IntPtr window, IntPtr parameter);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindow callback, IntPtr parameter);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr window, StringBuilder text, int count);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr window, StringBuilder text, int count);
     static Process? FindOwnedProcess(string executable)
     {
         Process? found = null;
