@@ -70,4 +70,37 @@ try
     Check(File.ReadAllText(Path.Combine(install, "personal.txt")) == "preserve", "update preserves unrelated user files");
 }
 finally { Directory.Delete(install, true); Directory.Delete(candidate, true); }
+async Task RejectDownload(Func<Task> action, string title)
+{
+    try { await action(); } catch (InvalidDataException) { Check(true, title); return; }
+    throw new Exception("Accepted invalid download: " + title);
+}
+int redirects = 0;
+using (var client = new ReleaseClient(new FakeHttp(_ =>
+{
+    redirects++;
+    if (redirects == 1) { var response = new HttpResponseMessage(System.Net.HttpStatusCode.Redirect); response.Headers.Location = new Uri("https://release-assets.githubusercontent.com/fixture"); return response; }
+    return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new ByteArrayContent([1, 2, 3]) };
+})))
+    Check((await client.Download(new("https://github.com/kirktools/screenshot/releases/download/v9.0.0/fixture"), 10, default)).SequenceEqual(new byte[] { 1, 2, 3 }) && redirects == 2, "official HTTPS redirect downloaded");
+using (var client = new ReleaseClient(new FakeHttp(_ =>
+{
+    var response = new HttpResponseMessage(System.Net.HttpStatusCode.Redirect); response.Headers.Location = new Uri("https://example.invalid/fixture"); return response;
+}))) await RejectDownload(async () => await client.Download(new("https://github.com/fixture"), 10, default), "foreign redirect refused before request");
+using (var client = new ReleaseClient(new FakeHttp(_ =>
+{
+    var content = new ByteArrayContent([1, 2, 3, 4]); content.Headers.ContentLength = 1;
+    return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = content };
+}))) await RejectDownload(async () => await client.Download(new("https://github.com/fixture"), 3, default), "stream limit enforced despite declared length");
+using (var client = new ReleaseClient(new FakeHttp(_ => new HttpResponseMessage(System.Net.HttpStatusCode.OK))))
+{
+    using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
+    try { await client.Download(new("https://github.com/fixture"), 10, cancellation.Token); throw new Exception("cancel ignored"); }
+    catch (OperationCanceledException) { Check(true, "download cancellation preserved"); }
+}
 Console.WriteLine($"{count} checks passed");
+sealed class FakeHttp(Func<HttpRequestMessage, HttpResponseMessage> send) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellation)
+    { cancellation.ThrowIfCancellationRequested(); return Task.FromResult(send(request)); }
+}

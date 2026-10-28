@@ -27,6 +27,7 @@ internal static class Updates
         directory = Path.GetFullPath(directory);
         if (Path.GetDirectoryName(directory) != Path.GetFullPath(Root) || !Guid.TryParseExact(Path.GetFileName(directory), "N", out _) || !File.Exists(Path.Combine(directory, "plan.json"))) throw new InvalidDataException("更新确认目录无效");
         File.WriteAllText(Path.Combine(directory, "started"), "started");
+        UpdateProcessFixture.Started();
     }
     public static void Cleanup()
     {

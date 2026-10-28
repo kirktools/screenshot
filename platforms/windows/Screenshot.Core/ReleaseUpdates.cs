@@ -61,9 +61,9 @@ public static class ReleaseUpdates
 }
 public sealed class ReleaseClient : IDisposable
 {
-    readonly HttpClient http = new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromMinutes(5) };
+    readonly HttpClient http;
     static readonly string[] hosts = ["api.github.com", "github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com", "objects-origin.githubusercontent.com"];
-    public ReleaseClient() { http.DefaultRequestHeaders.UserAgent.ParseAdd("Screenshot-Windows/1.0"); }
+    public ReleaseClient(HttpMessageHandler? transport = null) { http = new(transport ?? new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromMinutes(5) }; http.DefaultRequestHeaders.UserAgent.ParseAdd("Screenshot-Windows/1.0"); }
     public async Task<byte[]> Download(Uri url, int limit, CancellationToken cancellation)
     {
         for (int redirects = 0; redirects < 6; redirects++)

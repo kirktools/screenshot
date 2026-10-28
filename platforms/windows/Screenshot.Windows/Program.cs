@@ -7,6 +7,7 @@ internal static class Program
     static int Main(string[] args)
     {
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
+        if (args is ["--prepare-update-test", var task, var candidate]) return UpdateProcessFixture.Prepare(task, candidate);
         if (args is ["--apply-update", var folder]) return Updates.Apply(folder);
         if (args is ["--self-test"]) return WindowsSelfTest.Run();
         if (args is ["--desktop-self-test"]) return DesktopSelfTest.Run();
