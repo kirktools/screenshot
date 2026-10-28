@@ -119,25 +119,29 @@ internal static class DesktopSelfTest
     }
     static async Task TestFrozenSelection(Fixture fixture, Bitmap document, Rectangle region)
     {
+        foreach (var area in new[] { new Rectangle(20, 20, 128, 100), new Rectangle(20, 20, 12, 8) })
+        {
+            fixture.ScrollTo(0); fixture.Activate(); fixture.Refresh(); await Task.Delay(100);
         Bitmap? result = null;
         using (var overlay = new Selection(false))
         {
             overlay.Selected += (_, image) => result = image;
             fixture.ScrollTo(30); // 冻结后改变原窗口，框选结果仍必须是原画面。
             overlay.Show(); overlay.Refresh(); await Task.Delay(100);
-            var a = overlay.PointToClient(new Point(region.Left + 20, region.Top + 20));
-            var b = overlay.PointToClient(new Point(region.Left + 148, region.Top + 120));
+            var a = overlay.PointToClient(new Point(region.Left + area.Left, region.Top + area.Top));
+            var b = overlay.PointToClient(new Point(region.Left + area.Right, region.Top + area.Bottom));
             IntPtr Position(Point p) => (IntPtr)((p.Y << 16) | (p.X & 0xFFFF));
             SendMessage(overlay.Handle, 0x201, (IntPtr)1, Position(a));
             SendMessage(overlay.Handle, 0x200, (IntPtr)1, Position(b));
             SendMessage(overlay.Handle, 0x202, IntPtr.Zero, Position(b));
         }
         using (result)
-        using (var expected = Capture.Crop(document, new(20, 20, 128, 100)))
+        using (var expected = Capture.Crop(document, area))
         {
             if (result == null || result.Size != expected.Size) throw new InvalidOperationException("冻结框选未生成正确区域");
             for (int y = 0; y < result.Height; y++) for (int x = 0; x < result.Width; x++)
                 if (result.GetPixel(x, y).ToArgb() != expected.GetPixel(x, y).ToArgb()) throw new InvalidOperationException("框选结果不是冻结时的原始像素");
+        }
         }
         fixture.ScrollTo(0); fixture.Activate(); fixture.Refresh(); await Task.Delay(100);
         Console.WriteLine("PASS: native selection uses frozen layered pixels, despite subsequent source changes");

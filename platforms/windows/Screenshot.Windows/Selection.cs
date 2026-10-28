@@ -29,7 +29,7 @@ internal sealed class Selection : Form
     protected override void OnMouseUp(MouseEventArgs e)
     {
         if (!dragging) return; dragging = false; Capture = false;
-        if (region.Width < 32 || region.Height < 80) { Invalidate(); return; }
+        if (region.Width < (scrolling ? 32 : 2) || region.Height < (scrolling ? 80 : 2)) { Invalidate(); return; }
         var screen = new Rectangle(region.X + desktop.X, region.Y + desktop.Y, region.Width, region.Height);
         if (scrolling && !System.Windows.Forms.Screen.AllScreens.Any(s => s.Bounds.Contains(screen))) { MessageBox.Show(this, "长截图选区需位于同一块屏幕内。", "请重新框选"); return; }
         var result = scrolling ? null : Screenshot.Windows.Capture.Crop(frozen, region);

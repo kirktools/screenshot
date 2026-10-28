@@ -14,12 +14,13 @@ $swiftRoot = Join-Path $env:LOCALAPPDATA 'Programs/Swift'
 $roots = @($swiftRoot, 'C:/Library/Developer', 'C:/Program Files/Swift') | Where-Object { Test-Path $_ }
 $compiler = @($roots | ForEach-Object { Get-ChildItem $_ -Filter swiftc.exe -Recurse -ErrorAction SilentlyContinue }) | Select-Object -First 1
 if (!$compiler) { throw '未找到安装后的 swiftc' }
-$env:Path = "$($compiler.DirectoryName);$([Environment]::GetEnvironmentVariable('Path','User'));$env:Path"
+$swiftPaths = @($compiler.DirectoryName) + @([Environment]::GetEnvironmentVariable('Path','User') -split ';' | Where-Object { $_ -and ($_ -like '*\Swift\*' -or $_ -like '*\Library\Developer\*') })
+$env:Path = ($swiftPaths -join ';') + ';' + $env:Path
 foreach ($key in @('SDKROOT','SWIFTFLAGS')) {
     $value = [Environment]::GetEnvironmentVariable($key,'User')
     if ($value) { [Environment]::SetEnvironmentVariable($key,$value,'Process'); "$key=$value" | Out-File $env:GITHUB_ENV -Append -Encoding utf8 }
 }
-$compiler.DirectoryName | Out-File $env:GITHUB_PATH -Append -Encoding utf8
-foreach ($path in ([Environment]::GetEnvironmentVariable('Path','User') -split ';')) { if ($path) { $path | Out-File $env:GITHUB_PATH -Append -Encoding utf8 } }
+# 保留 runner 原有工具顺序；不把 WindowsApps 的执行别名放到 Python 前面。
+foreach ($path in $swiftPaths) { $path | Out-File $env:GITHUB_PATH -Append -Encoding utf8 }
 & $compiler.FullName --version
 if ($LASTEXITCODE -ne 0) { throw 'Swift 编译器无法运行' }
