@@ -99,7 +99,7 @@ internal sealed class ScrollSession : IDisposable
         { finishing = false; timer.Start(); return; }
         try
         {
-            using var result = new Bitmap(region.Width, height); using (var g = Graphics.FromImage(result)) { int y = 0; foreach (var s in segments) { g.DrawImageUnscaled(s.Image, 0, y); y += s.Image.Height; } }
+            using var result = new Bitmap(region.Width, height); using (var g = Graphics.FromImage(result)) { int y = 0; foreach (var s in segments) { Capture.DrawPixels(g, s.Image, 0, y); y += s.Image.Height; } }
             if (output(result, mode)) Dispose(); else { finishing = false; timer.Start(); }
         }
         catch { panel.Error = "导出失败，请关闭占用剪贴板的程序或释放内存后重试。"; finishing = false; timer.Start(); }

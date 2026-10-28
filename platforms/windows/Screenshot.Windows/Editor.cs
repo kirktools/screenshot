@@ -20,7 +20,7 @@ internal sealed class EditDocument(Bitmap image) : IDisposable
     }
     public void Paint(Graphics g, EditState state)
     {
-        g.DrawImageUnscaled(Image, Point.Empty); g.SmoothingMode = SmoothingMode.AntiAlias;
+        Capture.DrawPixels(g, Image); g.SmoothingMode = SmoothingMode.AntiAlias;
         foreach (var mark in state.Marks) Draw(g, mark);
     }
     public static Rectangle Area(Point a, Point b) => Rectangle.FromLTRB(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Max(a.X, b.X), Math.Max(a.Y, b.Y));

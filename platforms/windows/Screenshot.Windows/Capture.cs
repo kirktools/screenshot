@@ -5,6 +5,9 @@ namespace Screenshot.Windows;
 
 internal static class Capture
 {
+    // 显式指定源/目标像素，避免 GDI+ 按显示器 DPI 缩放冻结画面与导出图像。
+    public static void DrawPixels(Graphics graphics, Bitmap image, int x = 0, int y = 0) =>
+        graphics.DrawImage(image, new Rectangle(x, y, image.Width, image.Height), new Rectangle(Point.Empty, image.Size), GraphicsUnit.Pixel);
     public const long MaximumPixels = 24_000_000;
     public static Bitmap ScreenImage(Rectangle region)
     {
@@ -46,7 +49,7 @@ internal sealed class Selection : Form
     }
     protected override void OnPaint(PaintEventArgs e)
     {
-        e.Graphics.DrawImageUnscaled(frozen, Point.Empty);
+        Screenshot.Windows.Capture.DrawPixels(e.Graphics, frozen);
         using (var shade = new SolidBrush(Color.FromArgb(115, 0, 0, 0))) e.Graphics.FillRectangle(shade, ClientRectangle);
         if (region.Width > 0 && region.Height > 0)
         {

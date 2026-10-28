@@ -7,6 +7,14 @@ internal static class WindowsSelfTest
     {
         try
         {
+            int uiThread = Environment.CurrentManagedThreadId; bool notified = false;
+            using (var displays = new SystemEventsBridge(() => { if (Environment.CurrentManagedThreadId != uiThread) throw new Exception("显示事件未返回 UI 线程"); notified = true; }))
+            {
+                Task.Run(displays.Dispatch).GetAwaiter().GetResult(); Application.DoEvents();
+                if (!notified) throw new Exception("显示事件未送达");
+                displays.Dispose(); Task.Run(displays.Dispatch).GetAwaiter().GetResult();
+            }
+            Console.WriteLine("PASS: display change dispatched to UI thread and safely disposed");
             foreach (string json in new[] { "null", "{}", "{\"Region\":null,\"Scroll\":null}", "{\"Region\":{\"Modifiers\":0,\"Key\":0},\"Scroll\":null}" })
                 if (Preferences.Parse(json) != Preferences.Default) throw new Exception("损坏设置未回退默认值");
             if (Updates.IsElevated)
@@ -16,6 +24,14 @@ internal static class WindowsSelfTest
             }
             using var source = new Bitmap(120, 100); using (var g = Graphics.FromImage(source)) { g.Clear(Color.White); g.FillRectangle(Brushes.Blue, 10, 10, 30, 25); }
             using var document = new EditDocument((Bitmap)source.Clone());
+            foreach (float dpi in new[] { 96f, 144f, 192f })
+            {
+                using var target = new Bitmap(120, 100); target.SetResolution(dpi, dpi);
+                using (var graphics = Graphics.FromImage(target)) document.Paint(graphics, document.State);
+                for (int y = 0; y < source.Height; y++) for (int x = 0; x < source.Width; x++)
+                    if (target.GetPixel(x, y).ToArgb() != source.GetPixel(x, y).ToArgb()) throw new Exception("不同 DPI 绘制发生像素缩放");
+            }
+            Console.WriteLine("PASS: editor pixel rendering at 96/144/192 DPI");
             document.Apply(document.State with { Marks = [new(Tool.Redact, new(8, 8), new(45, 40), Color.Red, 4)] });
             using (var image = document.Render())
             {

@@ -21,7 +21,7 @@ internal static class Program
 }
 internal sealed class ScreenshotContext : ApplicationContext
 {
-    readonly NotifyIcon tray; readonly Hotkeys keys = new(); Preferences preferences = Preferences.Load();
+    readonly SystemEventsBridge displays; readonly NotifyIcon tray; readonly Hotkeys keys = new(); Preferences preferences = Preferences.Load();
     Selection? selection; Editor? editor; ScrollSession? scroll; Form? settings; bool updating, disposed, startingScroll; CancellationTokenSource? updateCancellation;
     bool Busy => selection != null || editor != null || scroll != null || updating || startingScroll;
     public ScreenshotContext()
@@ -29,7 +29,7 @@ internal sealed class ScreenshotContext : ApplicationContext
         tray = new() { Icon = Profile.Development ? SystemIcons.Information : SystemIcons.Application, Text = Profile.Name, Visible = true }; tray.DoubleClick += (_, _) => Settings(); keys.Triggered += Trigger; Menu();
         if (!Bind(preferences)) { tray.ShowBalloonTip(5000, "快捷键注册失败", "组合键已被其他应用占用，可从托盘截图并打开设置修改。", ToolTipIcon.Warning); }
         else tray.ShowBalloonTip(3000, "Screenshot 已启动", $"截图：{preferences.Region}；长图：{preferences.Scroll}。双击托盘打开设置。", ToolTipIcon.Info);
-        SystemEventsBridge.Subscribe(this); _ = CleanupUpdates();
+        displays = new(CancelForDisplayChange); _ = CleanupUpdates();
     }
     static async Task CleanupUpdates() { await Task.Delay(3000); Updates.Cleanup(); }
     bool Bind(Preferences value)
@@ -134,13 +134,29 @@ internal sealed class ScreenshotContext : ApplicationContext
     public void CancelForDisplayChange() { selection?.Close(); }
     protected override void ExitThreadCore()
     {
-        if (disposed) return; disposed = true; updateCancellation?.Cancel(); SystemEventsBridge.Unsubscribe(this); scroll?.Dispose(); selection?.Dispose(); editor?.Close(); settings?.Close(); tray.Visible = false; tray.Dispose(); keys.Dispose(); base.ExitThreadCore();
+        if (disposed) return; disposed = true; updateCancellation?.Cancel(); displays.Dispose(); scroll?.Dispose(); selection?.Dispose(); editor?.Close(); settings?.Close(); tray.Visible = false; tray.Dispose(); keys.Dispose(); base.ExitThreadCore();
     }
 }
-internal static class SystemEventsBridge
+// 系统显示事件来自后台线程，不能在那里枚举 WinForms 窗口集合。
+internal sealed class SystemEventsBridge : IDisposable
 {
-    static ScreenshotContext? context;
-    public static void Subscribe(ScreenshotContext value) { context = value; Microsoft.Win32.SystemEvents.DisplaySettingsChanged += Changed; }
-    static void Changed(object? sender, EventArgs e) { var current = context; var form = Application.OpenForms.Cast<Form>().FirstOrDefault(); if (current != null && form != null && !form.IsDisposed) form.BeginInvoke(new Action(current.CancelForDisplayChange)); }
-    public static void Unsubscribe(ScreenshotContext value) { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= Changed; context = null; }
+    readonly Control dispatcher = new(); readonly Action changed; volatile bool disposed;
+    public SystemEventsBridge(Action changed)
+    {
+        this.changed = changed;
+        _ = dispatcher.Handle; // 在拥有者 UI 线程创建消息句柄。
+        Microsoft.Win32.SystemEvents.DisplaySettingsChanged += Changed;
+    }
+    void Changed(object? sender, EventArgs e) => Dispatch();
+    internal void Dispatch()
+    {
+        if (disposed) return;
+        try { dispatcher.BeginInvoke(new Action(() => { if (!disposed) changed(); })); }
+        catch (InvalidOperationException) { /* 退出时句柄可能刚被释放。 */ }
+    }
+    public void Dispose()
+    {
+        if (disposed) return; disposed = true;
+        Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= Changed; dispatcher.Dispose();
+    }
 }
