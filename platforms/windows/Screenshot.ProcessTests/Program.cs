@@ -55,7 +55,7 @@ internal static class Program
             try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch (IOException) { }
         }
     }
-    static string Diagnostic(string root, string task) => string.Join(" | ", new[] { Path.Combine(root, "error.txt"), Path.Combine(task, "failure.txt") }.Where(File.Exists).Select(File.ReadAllText).DefaultIfEmpty("无助手错误；请检查系统来源确认"));
+    static string Diagnostic(string root, string task) => string.Join(" | ", new[] { Path.Combine(root, "error.txt"), Path.Combine(task, "failure.txt"), Path.Combine(task, "phase.txt") }.Where(File.Exists).Select(File.ReadAllText).DefaultIfEmpty("无助手错误；请检查系统来源确认"));
     static string Hash(string path) { using var stream = File.OpenRead(path); return Convert.ToHexString(SHA256.HashData(stream)); }
     static void WaitFor(int pid, int timeout)
     { try { using var process = Process.GetProcessById(pid); if (!process.WaitForExit(timeout)) throw new Exception("助手未正常退出"); } catch (ArgumentException) { } }

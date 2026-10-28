@@ -25,6 +25,7 @@ internal static class DesktopSelfTest
         Application.Run(fixture);
         return exit;
     }
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
     static Bitmap Document()
     {
         var image = new Bitmap(256, 720, PixelFormat.Format32bppRgb);
@@ -56,6 +57,9 @@ internal static class DesktopSelfTest
         using (var expected = Capture.Crop(document, new(Point.Empty, region.Size)))
         {
             double difference = new StitchMatcher().Difference(Capture.Gray(capture), Capture.Gray(expected));
+            GetWindowThreadProcessId(Native.GetForegroundWindow(), out uint foregroundPid);
+            string foreground = "none"; try { using var process = System.Diagnostics.Process.GetProcessById((int)foregroundPid); foreground = process.ProcessName; } catch (ArgumentException) { }
+            Console.WriteLine($"FOREGROUND: {foreground}");
             Console.WriteLine($"CAPTURE: dpi={fixture.DeviceDpi}, imageDpi={document.HorizontalResolution}, region={region.Size}, difference={difference:F3}, paints={fixture.Paints}, foregroundSelf={Native.GetForegroundWindow() == fixture.Handle}, mean={Capture.Gray(capture).Pixels.Average(v => (double)v):F2}");
             if (difference > .1)
                 throw new InvalidOperationException("自身测试窗口与 GDI 实际采集不一致，可能存在遮挡、缩放或无交互桌面");

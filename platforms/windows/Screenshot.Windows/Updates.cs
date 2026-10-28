@@ -125,6 +125,7 @@ internal static class Updates
                 var start = new ProcessStartInfo(executable) { UseShellExecute = true, WorkingDirectory = install };
                 start.ArgumentList.Add("--update-started"); start.ArgumentList.Add(directory);
                 phase = "launch";
+                if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true") File.WriteAllText(Path.Combine(directory, "phase.txt"), phase);
                 using var child = Process.Start(start) ?? throw new IOException("新版没有启动");
                 var deadline = DateTime.UtcNow.AddSeconds(15);
                 while (!File.Exists(Path.Combine(directory, "started")))
