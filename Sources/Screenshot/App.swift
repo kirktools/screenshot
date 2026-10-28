@@ -1,6 +1,12 @@
 import AppKit
 import Carbon
 
+enum ApplicationFlavor {
+    static func isDevelopment(_ identifier: String?) -> Bool { identifier == "com.kirktools.screenshot.dev" }
+    static var isDevelopment: Bool { isDevelopment(Bundle.main.bundleIdentifier) }
+    static var name: String { isDevelopment ? "Screenshot Dev" : "Screenshot" }
+}
+
 // SwiftPM 的独立可执行文件查找位置与标准 .app/Contents/Resources 不同。
 // 安装版必须显式使用包内资源，不能依赖开发机或 CI 的 .build 目录。
 enum AppLocalization {
@@ -24,7 +30,7 @@ enum AppLocalization {
                 throw CaptureError.message("安装包语言资源无效：\(language)")
             }
         }
-        guard Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String == "Screenshot", Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String == "Screenshot" else { throw CaptureError.message("应用展示名称未统一") }
+        guard Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String == ApplicationFlavor.name, Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String == ApplicationFlavor.name else { throw CaptureError.message("应用展示名称未统一") }
         guard let licenseURL = Bundle.main.resourceURL?.appendingPathComponent("LICENSE.txt"),
               let license = try? String(contentsOf: licenseURL, encoding: .utf8),
               license.hasPrefix("MIT License"), license.contains("Permission is hereby granted"), license.contains("kirktools") else { throw CaptureError.message("安装包缺少完整的 MIT 许可证") }
@@ -159,16 +165,21 @@ struct ScreenPermissionAccess {
             guard let running = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication, running.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
             MainActor.assumeIsolated { self?.lastExternalApp = running }
         }
-        normal = load("screenshot.region", fallback: .normal); scroll = load("screenshot.scroll", fallback: .scroll)
+        normal = load("screenshot.region", fallback: ApplicationFlavor.isDevelopment ? .fallbackNormal : .normal); scroll = load("screenshot.scroll", fallback: ApplicationFlavor.isDevelopment ? .fallbackScroll : .scroll)
         configureMenuBar(); registerTools(); refreshMenu()
         if CommandLine.arguments.contains("--demo-editor") { present(makeDemoImage()); return }
         // 菜单栏工具启动时保持安静；设置只由明确的菜单或快捷键动作打开。
     }
     func configureMenuBar() {
         guard item == nil else { return }
-        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "Screenshot")
-        item.button?.toolTip = "Screenshot · 点击开始截图或打开设置"
+        item = NSStatusBar.system.statusItem(withLength: ApplicationFlavor.isDevelopment ? NSStatusItem.variableLength : NSStatusItem.squareLength)
+        item.button?.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: ApplicationFlavor.name)
+        if ApplicationFlavor.isDevelopment {
+            item.button?.title = "DEV"
+            item.button?.font = NSFont.systemFont(ofSize: 9, weight: .bold)
+            item.button?.imagePosition = .imageLeading
+        }
+        item.button?.toolTip = "\(ApplicationFlavor.name) · 点击开始截图或打开设置"
         buildMainMenu(); refreshMenu()
     }
     func showPermissionHint() {
@@ -218,12 +229,12 @@ struct ScreenPermissionAccess {
     private func refreshMenu() {
         guard item != nil else { return }
         let menu = NSMenu()
-        let title = NSMenuItem(title: "Screenshot", action: nil, keyEquivalent: ""); menu.addItem(title)
+        let title = NSMenuItem(title: ApplicationFlavor.name, action: nil, keyEquivalent: ""); menu.addItem(title)
         menu.addItem(.separator())
         add(menu, "\(localized("capture.normal"))   \(normal.label)", #selector(normalCapture))
         add(menu, "\(localized("capture.scroll"))   \(scroll.label)", #selector(scrollCapture))
         if editor != nil { add(menu, "打开上次预览", #selector(showEditor)) }
-        menu.addItem(.separator()); add(menu, "检查更新…", #selector(checkForUpdates)); add(menu, localized("settings"), #selector(openSettings))
+        menu.addItem(.separator()); if !ApplicationFlavor.isDevelopment { add(menu, "检查更新…", #selector(checkForUpdates)) }; add(menu, localized("settings"), #selector(openSettings))
         add(menu, localized("quit"), #selector(quit)); item.menu = menu
     }
     private func add(_ menu: NSMenu, _ title: String, _ action: Selector) { let i = NSMenuItem(title: title, action: action, keyEquivalent: ""); i.target = self; menu.addItem(i) }
@@ -232,7 +243,7 @@ struct ScreenPermissionAccess {
         let appItem = NSMenuItem(); appItem.submenu = app; menu.addItem(appItem)
         let settings = NSMenuItem(title: localized("settings"), action: #selector(openSettings), keyEquivalent: ",")
         settings.target = self; app.addItem(settings); app.addItem(.separator())
-        let quit = NSMenuItem(title: "退出 Screenshot", action: #selector(quit), keyEquivalent: "q"); quit.target = self; app.addItem(quit)
+        let quit = NSMenuItem(title: "退出 \(ApplicationFlavor.name)", action: #selector(quit), keyEquivalent: "q"); quit.target = self; app.addItem(quit)
         let editItem = NSMenuItem(title: "编辑", action: nil, keyEquivalent: ""); editItem.submenu = edit; menu.addItem(editItem)
         edit.addItem(withTitle: "撤销", action: #selector(EditorCanvas.undo(_:)), keyEquivalent: "z")
         let redo = edit.addItem(withTitle: "重做", action: #selector(EditorCanvas.redo(_:)), keyEquivalent: "z"); redo.keyEquivalentModifierMask = [.command, .shift]
@@ -361,6 +372,7 @@ struct ScreenPermissionAccess {
     }
     func releaseUpdateInstallation() { installingUpdate = false }
     @objc private func checkForUpdates() {
+        guard !ApplicationFlavor.isDevelopment else { return }
         if updateController == nil { updateController = AppUpdateController(canInstall: { [weak self] in self?.busy == false && self?.installingUpdate == false }, beginInstall: { [weak self] in
             self?.reserveUpdateInstallation() ?? false
         }, endInstall: { [weak self] in self?.releaseUpdateInstallation() }) }
@@ -371,7 +383,7 @@ struct ScreenPermissionAccess {
         dismissPermissionHint()
         if let settings { refreshSettingsStatus(); NSApp.activate(ignoringOtherApps: true); settings.makeKeyAndOrderFront(nil); return }
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 610, height: 610), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "Screenshot · 设置"; window.isReleasedWhenClosed = false; window.center()
+        window.title = "\(ApplicationFlavor.name) · 设置"; window.isReleasedWhenClosed = false; window.center()
         let title = NSTextField(labelWithString: "随时截图，内容留在本机。")
         title.font = .systemFont(ofSize: 22, weight: .semibold)
         let help = NSTextField(wrappingLabelWithString: "点击快捷键框，再按新的组合键。长截图时请框选可滚动正文，避开固定顶部栏、输入框和悬浮按钮；可连续向下滚动，无需逐次停顿；快速跳跃或内容重排可能无法接续。")
@@ -407,7 +419,8 @@ struct ScreenPermissionAccess {
         hotkeyStatusLabel = hotkeyStatus; views.append(hotkeyStatus)
         let version = NSTextField(labelWithString: "版本 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版") · macOS 14+ · MIT © kirktools")
         version.textColor = .secondaryLabelColor
-        let updates = NSButton(title: "检查更新…", target: self, action: #selector(checkForUpdates))
+        let updates = NSButton(title: ApplicationFlavor.isDevelopment ? "开发版：用 make dev 更新" : "检查更新…", target: self, action: #selector(checkForUpdates))
+        updates.isEnabled = !ApplicationFlavor.isDevelopment
         let versionActions = NSStackView(views: [version, updates]); versionActions.spacing = 12; views.append(versionActions)
         let source = Bundle.main.object(forInfoDictionaryKey: "BuildSource") as? String ?? "开发构建"
         let location = NSTextField(wrappingLabelWithString: "源码：\(source)\n当前应用：\(Bundle.main.bundlePath)")

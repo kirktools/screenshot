@@ -4,6 +4,8 @@ import importlib.util
 from pathlib import Path
 import plistlib
 import tempfile
+import shutil
+import subprocess
 import unittest
 from unittest import mock
 import zipfile
@@ -127,6 +129,45 @@ class InstallTests(unittest.TestCase):
                 dev.install(self.source, self.target, self.backups, validate_app=lambda _: None, stop=lambda: None, previous_target=legacy)
         self.assertFalse(self.target.exists())
         self.assertEqual((legacy / 'Contents/MacOS/Screenshot').read_text(), 'old')
+
+    def test_development_install_keeps_daily_app_untouched(self):
+        source = self.root / 'dist/Screenshot Dev.app'
+        shutil.copytree(self.source, source)
+        (source / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.kirktools.screenshot.dev', 'CFBundleExecutable': 'Screenshot'}))
+        target = self.target.with_name('Screenshot Dev.app')
+        commands = []
+        original_run = dev.run
+        def execute(args):
+            values = [str(x) for x in args]
+            if values[0] == 'open' or values[0].endswith('/lsregister'):
+                commands.append(values)
+                return
+            return original_run(args)
+        with mock.patch.multiple(dev, ROOT=self.root, TARGET=target, APP_NAME='Screenshot Dev.app', LEGACY_NAME=None,
+                                 BUNDLE_IDENTIFIER='com.kirktools.screenshot.dev', IS_DEVELOPMENT=True), \
+             mock.patch.object(dev, 'validate', return_value=None), mock.patch.object(dev, 'stop_instances'), mock.patch.object(dev, 'run', side_effect=execute):
+            self.assertFalse(dev.is_our_process(str(self.binary())))
+            dev.install_and_launch()
+            self.assertTrue(dev.is_our_process(str(target / 'Contents/MacOS/Screenshot')))
+        self.assertEqual(self.binary().read_text(), 'old')
+        self.assertEqual((target / 'Contents/MacOS/Screenshot').read_text(), 'new')
+        self.assertEqual(commands[-1], ['open', str(target)])
+
+    def test_development_stops_only_development_process(self):
+        app = self.target.with_name('Screenshot Dev.app')
+        shutil.copytree(self.source, app)
+        (app / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.kirktools.screenshot.dev', 'CFBundleExecutable': 'Screenshot'}))
+        def process(args, **kwargs):
+            if args[0] == 'pgrep': output = '101\n102\n' if args[-1] == 'Screenshot' else ''
+            elif args[-1] == 'uid=': output = str(dev.os.getuid())
+            else: output = str(self.binary() if args[2] == '101' else app / 'Contents/MacOS/Screenshot')
+            return subprocess.CompletedProcess(args, 0, output, '')
+        def kill(pid, signal):
+            if signal == 0: raise ProcessLookupError()
+        with mock.patch.multiple(dev, BUNDLE_IDENTIFIER='com.kirktools.screenshot.dev', IS_DEVELOPMENT=True), \
+             mock.patch.object(dev.subprocess, 'run', side_effect=process), mock.patch.object(dev.os, 'kill', side_effect=kill) as stopped:
+            dev.stop_instances()
+        self.assertEqual(stopped.call_args_list, [mock.call(102, dev.signal.SIGTERM), mock.call(102, 0)])
 
     def test_refuses_other_app_identity(self):
         (self.target / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'other.screenshot'}))

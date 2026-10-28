@@ -15,7 +15,13 @@ build_flags+=(-Xswiftc -file-prefix-map -Xswiftc "$PWD=/screenshot"
               -Xlinker -oso_prefix -Xlinker "$PWD/")
 if [[ "${SCREENSHOT_NATIVE_BUILD:-0}" == 1 ]]; then build_flags+=(--build-system native); fi
 if [[ "${SCREENSHOT_DISABLE_BUILD_SANDBOX:-0}" == 1 ]]; then build_flags+=(--disable-sandbox); fi
-app="$PWD/dist/Screenshot.app"
+variant=${SCREENSHOT_VARIANT:-release}
+case "$variant" in
+  release) app_name=Screenshot; bundle_id=com.kirktools.screenshot ;;
+  development) app_name='Screenshot Dev'; bundle_id=com.kirktools.screenshot.dev; export SCREENSHOT_SKIP_PACKAGING=1 ;;
+  *) echo 'SCREENSHOT_VARIANT 只能是 release 或 development' >&2; exit 1 ;;
+esac
+app="$PWD/dist/$app_name.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 if [[ "${UNIVERSAL:-0}" == 1 ]]; then
   package_inputs=$(mktemp -d "$PWD/.build/package-inputs.XXXXXX")
@@ -48,7 +54,14 @@ PYTHON
 cp -R "$resource" "$app/Contents/Resources/"
 
 cp Resources/Info.plist "$app/Contents/Info.plist"
-cp Resources/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $bundle_id" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleName $app_name" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $app_name" "$app/Contents/Info.plist"
+if [[ "$variant" == development ]]; then
+  cp Resources/DevAppIcon.icns "$app/Contents/Resources/AppIcon.icns"
+else
+  cp Resources/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
+fi
 cp LICENSE "$app/Contents/Resources/LICENSE.txt"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER:-1}" "$app/Contents/Info.plist"
@@ -72,14 +85,8 @@ data['BuildSource'] = label
 with p.open('wb') as f:
     plistlib.dump(data, f)
 PYTHON
-# 默认 ad-hoc 签名仅保证包完整性，不是 Developer ID 签名或公证。
-identity=${SIGN_IDENTITY:--}
-if [[ "$identity" == '-' ]]; then
-  codesign --force --deep --sign - "$app"
-else
-  codesign --force --deep --options runtime --timestamp --sign "$identity" "$app"
-fi
-codesign --verify --deep --strict "$app"
+# CI 测试可使用 ad-hoc；make dev 与正式 Release 必须使用稳定证书身份。
+python3 scripts/sign-app.py "$app" --mode "${SCREENSHOT_SIGNING_MODE:-adhoc}"
 "$app/Contents/MacOS/Screenshot" --packaged-resources-test
 if [[ "${SCREENSHOT_SKIP_PACKAGING:-0}" != 1 ]]; then
   ditto -c -k --sequesterRsrc --keepParent "$app" "$PWD/dist/Screenshot-$version-macOS.zip"

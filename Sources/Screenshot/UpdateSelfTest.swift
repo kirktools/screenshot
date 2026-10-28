@@ -52,6 +52,11 @@ func makeUpdateFixture(in root: URL) throws -> URL {
     try candidate.requireCompatible(expected: ReleaseVersion("999.0.0"), currentTeam: nil)
     try rejects("包内版本不一致仍接受") { try candidate.requireCompatible(expected: ReleaseVersion("999.0.1"), currentTeam: nil) }
     try rejects("签名身份降级仍接受") { try candidate.requireCompatible(expected: ReleaseVersion("999.0.0"), currentTeam: "OTHERTEAM") }
+    let version = try ReleaseVersion("999.0.0"), os = try ReleaseVersion("14.0.0")
+    let stable = UpdateBundle(version: version, minimumOS: os, team: nil, certificate: "fixture-certificate-a")
+    try stable.requireCompatible(expected: version, currentTeam: nil, currentCertificate: "fixture-certificate-a")
+    try rejects("自签名更新更换证书仍接受") { try stable.requireCompatible(expected: version, currentTeam: nil, currentCertificate: "fixture-certificate-b") }
+    try rejects("自签名更新降级为 ad-hoc 仍接受") { try candidate.requireCompatible(expected: version, currentTeam: nil, currentCertificate: "fixture-certificate-a") }
     let archive = root.appendingPathComponent("good.zip")
     _ = try UpdateCommand.run("/usr/bin/ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", source.path, archive.path])
     let zip = try Data(contentsOf: archive)

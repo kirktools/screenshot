@@ -138,7 +138,7 @@ actor UpdateDownload {
             guard candidates.count == 1, let app = candidates.first else { throw UpdateError("更新包必须只包含一份应用。") }
             let current = try UpdateBundle.inspect(currentApp)
             let candidate = try UpdateBundle.inspect(app)
-            try candidate.requireCompatible(expected: package.version, currentTeam: current.team)
+            try candidate.requireCompatible(expected: package.version, currentTeam: current.team, currentCertificate: current.certificate)
             // 保留系统的下载验证机制，不通过去除隔离属性或重新签名绕过 Gatekeeper。
             _ = try UpdateCommand.run("/usr/bin/xattr", ["-w", "com.apple.quarantine", "0083;\(String(Int(Date().timeIntervalSince1970), radix: 16));Screenshot;", app.path])
             return PreparedUpdate(root: root, app: app, version: package.version, team: current.team)

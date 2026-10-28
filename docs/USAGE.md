@@ -11,7 +11,7 @@
 ```bash
 xcode-select --install # 尚未安装开发工具时
 scripts/test-core.sh  # 不依赖 XCTest，可用于只有 Command Line Tools 的环境
-make dev            # 更新并启动固定安装路径的测试版
+make dev            # 更新并启动独立 Screenshot Dev，不覆盖日常版
 ```
 
 单独运行 `scripts/build-app.sh` 可生成 `dist/Screenshot.app` 及与 `VERSION` 对应的 ZIP/DMG 安装包。默认本机构建架构；`UNIVERSAL=1 scripts/build-app.sh` 构建 arm64/x86_64 双架构，`CONFIGURATION=debug` 可改为调试构建。用 Xcode 打开 `Package.swift` 也可浏览调试，但日常运行建议使用固定位置的 `.app`，以稳定权限身份。
@@ -26,7 +26,7 @@ make dev            # 更新并启动固定安装路径的测试版
 make dev
 ```
 
-命令构建当前代码（包括未提交修改），校验签名完整性和语言资源，然后退出旧截图进程、备份并更新固定的 `/Applications/Screenshot.app`，最后启动。只构建本机架构，跳过 ZIP/DMG 打包；不切换分支、不推送、不发版本。需要 Swift 6+、Xcode Command Line Tools 和 Python 3。
+命令构建当前代码（包括未提交修改），校验签名完整性和语言资源，然后退出旧截图进程、备份并更新独立的 `/Applications/Screenshot Dev.app`，最后启动；日常 Screenshot 不会被覆盖或停止。开发版的快捷键、录屏授权和设置独立，默认快捷键为 `⌃⌥2 / ⌃⌥7`。只构建本机架构，跳过 ZIP/DMG 打包；不切换分支、不推送、不发版本。需要 Swift 6+、Xcode Command Line Tools 和 Python 3。
 
 例如通过编号验收 PR，无需创建或占用已有分支（把 123 改为目标 PR 编号）：
 
@@ -39,15 +39,15 @@ make dev
 
 这是临时检出该 PR 提交用于测试。切换前请提交或暂存自己的修改；测试结束可 `git switch master` 返回。无需为测试注册 `gh` 账号，使用仓库现有 Git 访问方式即可。
 
-应用设置底部会显示源码分支/提交、是否有本地修改，以及实际安装路径。请从此固定安装路径启动，避免同时运行 `dist`、下载目录或 `~/Applications` 的副本；先完成或取消当前截图再更新，卡住的截图进程会被结束。
+应用设置底部会显示源码分支/提交、是否有本地修改，以及实际安装路径。开发版从 `/Applications/Screenshot Dev.app` 启动，可与日常版共存；避免同时运行同一版本的 `dist`、下载目录或 `~/Applications` 副本；先完成或取消当前截图再更新，卡住的截图进程会被结束。
 
 旧应用保存在当前仓库 `.build/dev-backups/` 的 ZIP 中，更新失败会恢复原目录。恢复某份旧版时先退出截图应用，再解压该 ZIP 并放回 `/Applications`。脚本本身的更新、校验失败和回滚可用 `make dev-test` 验证，测试仅使用临时假应用。
 
-`make dev` 不修改 Gatekeeper、录屏开关或其他隐私权限，也不会自动使用 sudo。本机源码构建不经过浏览器下载隔离流程，但 ad-hoc 签名变化仍可能使已有录屏授权失效；这时只为固定路径这份应用授权并重新启动。不能保证每次构建都免重新授权。
+`make dev` 使用固定本地证书，源码内容变化不会更换证书身份。证书在主仓库 `.local/signing/`，所有 worktree 共用；首次使用独立开发版需要单独授予录屏权限，之后复用该身份。不要删除或提交签名资料。命令不修改 Gatekeeper、录屏开关或系统信任，也不使用 sudo；详细配置与验收见 [固定签名](SIGNING.md)。
 
 ## 安装与权限
 
-建议把应用安装到 `/Applications` 后首次启动，并保持唯一的日常安装副本。当前构建仅 **ad-hoc 签名**，不是 Developer ID 签名，也没有 Apple 公证。网络下载的包可能被 Gatekeeper 拦截；确认来源后可按 macOS 提示在“系统设置 → 隐私与安全性”中使用“仍要打开”（若系统允许）。不要关闭 Gatekeeper、SIP 或全局放宽安全策略；本地从源码构建是另一条路径。
+建议把应用安装到 `/Applications` 后首次启动，并保持唯一的日常安装副本。当前已发布的旧包可能仍为 **ad-hoc 签名**；固定自签名也不是 Developer ID 签名，没有 Apple 公证。网络下载的包可能被 Gatekeeper 拦截；确认来源后可按 macOS 提示在“系统设置 → 隐私与安全性”中使用“仍要打开”（若系统允许）。不要关闭 Gatekeeper、SIP 或全局放宽安全策略；本地从源码构建是另一条路径。
 
 启动只显示菜单栏图标；通过菜单「设置」在截图前申请“屏幕与系统音频录制 / 屏幕录制”（不同系统名称稍异）。只读屏幕像素，不申请麦克风、辅助功能或输入监控权限。全局快捷键采用 Carbon 热键注册，滚动由你在原应用内完成。
 
@@ -59,7 +59,7 @@ make dev
 
 注册快捷键前会读取 macOS 已启用的系统快捷键。系统可能自定义了 `⌘⇧7`，这时不能仅根据 `RegisterEventHotKey` 返回成功就认为可用：应用会自动尝试备用长截图键 `⌃⌥7`，显示原因并保存实际绑定；区域截图的备用键为 `⌃⌥2`。如果备用键也不可用，窗口会显示提示，可通过按钮截图或另设组合键。请以状态窗口中显示的绑定为准。
 
-若得到一条很扁的 Touch Bar 图片，是触发了系统截屏动作，而不是本应用的长截图界面。先打开应用，点击“区域截图”或“滚动长截图”按钮，区分键盘冲突和录屏权限问题。返回设置窗口时会重新检查权限状态；授权后按系统提示退出并重新打开同一路径的应用。开发版重新构建后，ad-hoc 签名变化可能需要再次授权。
+若得到一条很扁的 Touch Bar 图片，是触发了系统截屏动作，而不是本应用的长截图界面。先打开应用，点击“区域截图”或“滚动长截图”按钮，区分键盘冲突和录屏权限问题。返回设置窗口时会重新检查权限状态；授权后按系统提示退出并重新打开同一路径的应用。旧 ad-hoc 开发版重新构建可能需要再次授权；当前 `make dev` 使用固定证书，首次迁移后保持该身份。
 
 ## 使用
 
@@ -111,7 +111,7 @@ MIT License，Copyright © 2026 **kirktools**。
 
 旧版 ZIP 保留在 `~/Library/Caches/com.kirktools.screenshot/Updates/Backups/`，结果记录为同级 `last-result.txt`。替换失败自动恢复旧版；恢复也失败时会保留旧目录并报告位置，可退出应用后从备份解压恢复到 Applications。备份由用户自行清理。
 
-更新不解决未公证应用的系统限制：保留下载隔离标记，macOS 仍可能要求核验后「仍要打开」；ad-hoc 签名改变也可能需要重建录屏授权。后续完成 Developer ID 签名和公证后才能改善这一体验，勿关闭系统安全保护。
+更新不解决未公证应用的系统限制：保留下载隔离标记，macOS 仍可能要求核验后「仍要打开」；固定自签名发布需先配置 Actions Secrets，同证书更新用于延续授权；旧 ad-hoc 包初次迁移仍可能需要授权。下载的系统信任体验需要 Developer ID 和公证才能进一步改善，勿关闭系统安全保护。
 
 
 ## 菜单栏与名称
@@ -120,4 +120,4 @@ MIT License，Copyright © 2026 **kirktools**。
 
 应用展示名、窗口及安装包内的应用统一为 **Screenshot**，固定安装路径为 `/Applications/Screenshot.app`。Bundle ID 仍是 `com.kirktools.screenshot`，快捷键偏好保留；组织名和仓库仍为 kirktools/screenshot。新 ZIP/DMG 使用 `Screenshot-版本-macOS`；更新器仍可读取旧的 `Kirk-Screenshot-版本-macOS.zip` 资源。
 
-本地 `make dev` 检测到仅有旧的 `/Applications/Kirk Screenshot.app` 时，验证应用身份、备份后迁移到新路径；失败恢复旧名称，不同时保留两份。若新旧两份均存在，或新路径属于其他应用，会停止并说明原因，不覆盖其他软件。手动拖入 DMG 时也应先退出并备份旧版，避免留下两份。路径和 ad-hoc 签名变化后，macOS 仍可能要求重新录屏授权；本命令不重置权限。
+日常版旧安装迁移器检测到仅有旧的 `/Applications/Kirk Screenshot.app` 时，验证应用身份、备份后迁移到新路径；失败恢复旧名称，不同时保留两份。若新旧两份均存在，或新路径属于其他应用，会停止并说明原因，不覆盖其他软件。手动拖入 DMG 时也应先退出并备份旧版，避免留下两份。路径和 ad-hoc 签名变化后，macOS 仍可能要求重新录屏授权；安装器不重置权限。`make dev` 只更新独立开发版，不参与日常版迁移。

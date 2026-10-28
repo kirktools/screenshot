@@ -44,7 +44,12 @@ jobs:
           git merge-base --is-ancestor HEAD origin/master
       - name: 算法测试
         run: swift test
-      - name: 构建 universal 应用（ad-hoc 签名，尚未公证）
+      - name: 导入固定发布签名身份
+        env:
+          MACOS_SIGNING_KEYCHAIN_BASE64: ${{ secrets.MACOS_SIGNING_KEYCHAIN_BASE64 }}
+          MACOS_SIGNING_PASSWORD: ${{ secrets.MACOS_SIGNING_PASSWORD }}
+        run: python3 scripts/prepare-ci-signing.py
+      - name: 构建 universal 应用（固定证书，尚未公证）
         env:
           UNIVERSAL: '1'
           BUILD_NUMBER: ${{ github.run_number }}
@@ -75,3 +80,8 @@ jobs:
           gh release create "v$VERSION" dist/*.zip dist/*.dmg dist/SHA256SUMS.txt \
             --verify-tag --title "Screenshot v$VERSION" \
             --notes-file docs/RELEASE-NOTES.md --generate-notes
+      - name: 清理临时发布钥匙串
+        if: always()
+        run: |
+          keychain="$RUNNER_TEMP/screenshot-signing/release.keychain-db"
+          if [[ -f "$keychain" ]]; then security delete-keychain "$keychain"; fi

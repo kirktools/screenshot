@@ -34,6 +34,8 @@ jobs:
           swift --version
       - name: 发布脚本回归（临时本地仓库，不访问 GitHub）
         run: python3 scripts/test-release.py
+      - name: 固定签名策略回归（不修改钥匙串）
+        run: python3 scripts/test-signing.py
       - name: 本地更新脚本回归（临时假应用）
         run: python3 scripts/test-install-dev.py
       - name: 算法测试
@@ -52,6 +54,15 @@ jobs:
         run: "'dist/Screenshot.app/Contents/MacOS/Screenshot' --update-network-self-test"
       - name: 连续滚动会话回归（合成帧，不读取桌面）
         run: "'dist/Screenshot.app/Contents/MacOS/Screenshot' --scroll-session-self-test"
+      - name: 开发版隔离回归（不安装，不读取桌面）
+        env:
+          SCREENSHOT_VARIANT: development
+          SCREENSHOT_SIGNING_MODE: adhoc
+          SCREENSHOT_SKIP_PACKAGING: '1'
+        run: |
+          scripts/build-app.sh
+          'dist/Screenshot Dev.app/Contents/MacOS/Screenshot' --packaged-resources-test
+          'dist/Screenshot Dev.app/Contents/MacOS/Screenshot' --startup-smoke-test
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: Screenshot-${{ matrix.os }}

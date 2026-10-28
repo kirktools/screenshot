@@ -32,7 +32,7 @@ make release-dry-run BUMP=minor  # 计算并预览，不联网、不改文件、
 
 本机只需要 git、python3 以及平时 `git push` 的 SSH / HTTPS 认证，**无需安装或登录 gh**。云端使用 GitHub 自动提供的 GITHUB_TOKEN 调用 gh 创建 Release，不需要维护者额外存放个人 Token。标签触发依据 [GitHub 官方说明](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)。普通 master push 只跑 CI，不发布；不再有手动 workflow_dispatch 加版本流程，也不使用需要额外批准的 release Environment。
 
-README 的功能、限制和安装说明不会由脚本自动改写；发布说明由 `docs/RELEASE-NOTES.md` 通用说明加 GitHub 自动生成的提交/PR 变更记录组成。发布前如需补充说明，应先修改并提交到本次代码中。当前包仍是 ad-hoc 签名，发布成功不代表已完成 Apple 签名或公证。
+README 的功能、限制和安装说明不会由脚本自动改写；发布说明由 `docs/RELEASE-NOTES.md` 通用说明加 GitHub 自动生成的提交/PR 变更记录组成。发布前如需补充说明，应先修改并提交到本次代码中。新 Release 必须配置固定证书，缺少配置时停止；当前采用不付费的固定自签名方案，详见 [签名说明](SIGNING.md)。固定自签名不等于 Apple Developer ID 或公证。
 
 发布脚本回归运行 `python3 scripts/test-release.py`，使用临时本地 Git 仓库验证，不访问 GitHub，也不会真实发布。CI 会自动执行。
 
@@ -50,16 +50,16 @@ README 的功能、限制和安装说明不会由脚本自动改写；发布说�
 
 `scripts/build-app.sh` 同时生成 ZIP 和只读压缩 DMG。镜像内只有已签名应用和指向 `/Applications` 的安装入口，不会修改应用签名内容。已有构建可运行 `scripts/package-dmg.sh` 单独重新打包，`scripts/test-dmg.sh` 会以只读方式挂载，验证内容、安装入口、版本、签名及二进制后卸载。CI 的两种架构及 Release 均执行此验证；Artifact 和 Release 上传两种安装包，Release 校验和覆盖两者。已发布的旧版本不会自动补发 DMG。
 
-DMG 不绕过 Gatekeeper，也不代替 Developer ID 签名和公证。当前仍保持 ad-hoc 签名；未来签名/公证时应先完成应用公证和 staple，再重新生成最终 ZIP、DMG 与校验和；若公证 DMG，则提交最终镜像并对其 staple 后再生成校验和。
+DMG 不绕过 Gatekeeper，也不代替 Developer ID 签名和公证。新 Release 使用固定证书；未来接入 Apple 公证时应先完成应用公证和 staple，再重新生成最终 ZIP、DMG 与校验和；若公证 DMG，则提交最终镜像并对其 staple 后再生成校验和。
 
 ## 签名与公证
 
-当前产物仅 ad-hoc 签名，在 CI 中也如此；不会伪称“Apple 已验证”。正式公开分发需要 Apple Developer Program 账户、有效 Developer ID Application 证书及私钥、Team ID，以及 notarytool 可用的 App Store Connect API 凭据或 Apple ID 应用专用密码。不要提交证书、密码或私钥到仓库。
+目前本地开发和新 Release 使用固定自签名，普通 CI 测试包仍可采用 ad-hoc。固定证书配置见 [签名说明](SIGNING.md)，不会伪称“Apple 已验证”。如需 Developer ID 和 Apple 公证，需要 Apple Developer Program 账户、有效 Developer ID Application 证书及私钥、Team ID，以及 notarytool 可用的 App Store Connect API 凭据或 Apple ID 应用专用密码。不要提交证书、密码或私钥到仓库。
 
 [Apple 官方 Developer ID 指南](https://developer.apple.com/developer-id/)与[公证说明](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)。准备好身份后：
 
 ```bash
-SIGN_IDENTITY='Developer ID Application: YOUR ENTITY (TEAMID)' UNIVERSAL=1 scripts/build-app.sh
+SIGN_IDENTITY='Developer ID Application: YOUR ENTITY (TEAMID)' SIGN_TIMESTAMP=apple UNIVERSAL=1 scripts/build-app.sh
 xcrun notarytool submit dist/Screenshot-0.1.0-macOS.zip --keychain-profile YOUR_PROFILE --wait
 xcrun stapler staple 'dist/Screenshot.app'
 xcrun stapler validate 'dist/Screenshot.app'
@@ -69,4 +69,4 @@ ditto -c -k --sequesterRsrc --keepParent 'dist/Screenshot.app' dist/Screenshot-0
 shasum -a 256 dist/*.zip > dist/SHA256SUMS.txt
 ```
 
-`SIGN_IDENTITY` 分支启用 hardened runtime 与安全时间戳。CI 自动导入证书、隔离临时 keychain、公证凭据和清理尚未接入，需在取得实际签名材料后配置独立的受保护 job。不要把需要的 secret 伪造为占位值或在 fork PR 中开放使用。
+证书签名启用 hardened runtime；`SIGN_TIMESTAMP=apple` 才请求 Apple 安全时间戳，自签名默认离线签名。Release 已接入固定专用钥匙串载入和临时钥匙串清理，公证凭据和自动 staple 尚未接入。不要把 secret 伪造为占位值或在 fork PR 中开放使用。

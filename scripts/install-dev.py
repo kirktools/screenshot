@@ -13,8 +13,11 @@ import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
-TARGET = Path('/Applications/Screenshot.app')
-LEGACY_NAME = 'Kirk Screenshot.app'
+IS_DEVELOPMENT = os.environ.get('SCREENSHOT_VARIANT') == 'development'
+APP_NAME = 'Screenshot Dev.app' if IS_DEVELOPMENT else 'Screenshot.app'
+BUNDLE_IDENTIFIER = 'com.kirktools.screenshot.dev' if IS_DEVELOPMENT else 'com.kirktools.screenshot'
+TARGET = Path('/Applications') / APP_NAME
+LEGACY_NAME = None if IS_DEVELOPMENT else 'Kirk Screenshot.app'
 
 
 def run(args):
@@ -25,7 +28,7 @@ def executable_name(app):
     with (Path(app) / 'Contents/Info.plist').open('rb') as handle:
         info = plistlib.load(handle)
     name = info.get('CFBundleExecutable')
-    if info.get('CFBundleIdentifier') != 'com.kirktools.screenshot' or name not in ['Screenshot', 'KirkScreenshot']:
+    if info.get('CFBundleIdentifier') != BUNDLE_IDENTIFIER or name not in ['Screenshot', 'KirkScreenshot']:
         raise RuntimeError(f'不是本项目的有效应用：{app}')
     return name
 
@@ -43,7 +46,7 @@ def is_our_process(executable):
                 return path.name == executable_name(parent)
             except (OSError, ValueError, RuntimeError):
                 return False
-    return path.name in ['Screenshot', 'KirkScreenshot'] and ROOT.resolve() in path.resolve().parents and '.build' in path.parts
+    return not IS_DEVELOPMENT and path.name in ['Screenshot', 'KirkScreenshot'] and ROOT.resolve() in path.resolve().parents and '.build' in path.parts
 
 
 def stop_instances():
@@ -146,18 +149,18 @@ def owned_install(app):
         raise RuntimeError(f'拒绝替换链接：{app}')
     with (app / 'Contents/Info.plist').open('rb') as handle:
         info = plistlib.load(handle)
-    if info.get('CFBundleIdentifier') != 'com.kirktools.screenshot':
+    if info.get('CFBundleIdentifier') != BUNDLE_IDENTIFIER:
         raise RuntimeError(f'此路径属于其他应用，不会覆盖：{app}')
 
 
 def install_and_launch():
-    legacy = TARGET.with_name(LEGACY_NAME)
+    legacy = TARGET.with_name(LEGACY_NAME) if LEGACY_NAME else None
     for app in [TARGET, legacy]:
-        if app.exists() or app.is_symlink():
+        if app is not None and (app.exists() or app.is_symlink()):
             owned_install(app)
-    if TARGET.exists() and legacy.exists():
+    if TARGET.exists() and legacy is not None and legacy.exists():
         raise RuntimeError('检测到新旧两份应用，请先核对并保留一份；没有停止或替换应用。')
-    backup = install(ROOT / 'dist/Screenshot.app', TARGET, ROOT / '.build/dev-backups', previous_target=legacy if legacy.exists() else None)
+    backup = install(ROOT / 'dist' / APP_NAME, TARGET, ROOT / '.build/dev-backups', previous_target=legacy if legacy is not None and legacy.exists() else None)
     register = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
     run([register, '-f', TARGET])
     run(['open', TARGET])
@@ -165,11 +168,14 @@ def install_and_launch():
     if backup:
         print(f'旧版备份：{backup}')
     print('设置窗口会显示当前分支、提交和安装路径。不会切换分支、推送或发布。')
-    print('若 macOS 因签名变化要求重新录屏授权，请在该应用设置中处理；此命令不会重置授权。')
+    if IS_DEVELOPMENT:
+        print('这是独立开发版，不覆盖或停止日常 Screenshot。首次为 Screenshot Dev 授权，后续复用固定本地签名。')
+    print('不会重置系统录屏授权。')
 
 
 if __name__ == '__main__':
     try:
         main()
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
-        raise SystemExit(f'本地更新失败：{error}\n未自动提权；请确认你对 /Applications 中的此应用有写入权限。')
+        hint = '\n没有自动提权；请确认应用目录写入权限。' if isinstance(error, PermissionError) else ''
+        raise SystemExit(f'本地更新失败：{error}{hint}')

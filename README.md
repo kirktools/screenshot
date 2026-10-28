@@ -30,7 +30,7 @@
 
 支持 **macOS 14+**，Apple Silicon / Intel。新版本提供 DMG 安装包：打开后将应用拖入 Applications。也保留 ZIP；旧版没有 DMG 时可使用 ZIP。
 
-本地验收 PR：切到对应代码后运行 `make dev`，自动更新并启动 `/Applications/Screenshot.app`，设置中可核对分支和提交。详见[本地测试](docs/USAGE.md#本地验收-pr)。
+本地验收 PR：切到对应代码后运行 `make dev`，自动更新并启动独立的 `/Applications/Screenshot Dev.app`，不覆盖日常版；设置中可核对分支和提交。详见[本地测试](docs/USAGE.md#本地验收-pr)。
 
 从源码构建（Swift 6.0+）：
 
@@ -38,7 +38,7 @@
 make dev
 ```
 
-统一安装到 `/Applications/Screenshot.app`；`make dev` 会备份并迁移旧名称，避免多份应用。启动只驻留菜单栏，设置按需打开。首次截图需授予**屏幕录制**权限，不需要辅助功能或麦克风权限。
+日常版安装到 `/Applications/Screenshot.app`；源码开发使用独立的 `Screenshot Dev`，默认快捷键为 `⌃⌥2 / ⌃⌥7`，配置和权限各自独立。启动只驻留菜单栏，设置按需打开。首次截图需授予**屏幕录制**权限，不需要辅助功能或麦克风权限。
 
 当前应用尚未 Developer ID 签名及公证；下载包可能被 macOS 拦截，请按系统提示核验来源，勿关闭系统安全保护。详见[安装与权限](docs/USAGE.md#安装与权限)。
 

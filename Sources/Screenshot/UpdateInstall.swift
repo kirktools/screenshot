@@ -1,10 +1,12 @@
 import Foundation
 import Security
+import CryptoKit
 import Darwin
 
 struct UpdateBundle {
     let version: ReleaseVersion, minimumOS: ReleaseVersion
     let team: String?
+    let certificate: String?
     static func inspect(_ app: URL) throws -> UpdateBundle {
         let fm = FileManager.default
         guard ["Screenshot.app", "Kirk Screenshot.app"].contains(app.lastPathComponent), let iterator = fm.enumerator(at: app, includingPropertiesForKeys: [.isSymbolicLinkKey, .fileSizeKey]) else { throw UpdateError("更新中没有正确的应用目录。") }
@@ -38,10 +40,13 @@ struct UpdateBundle {
         var code: SecStaticCode?, signing: CFDictionary?
         guard SecStaticCodeCreateWithPath(app as CFURL, SecCSFlags(), &code) == errSecSuccess, let code,
               SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &signing) == errSecSuccess else { throw UpdateError("无法读取更新应用的签名身份。") }
-        let team = (signing as? [String: Any])?[kSecCodeInfoTeamIdentifier as String] as? String
+        let details = signing as? [String: Any]
+        let team = details?[kSecCodeInfoTeamIdentifier as String] as? String
+        let certificates = details?[kSecCodeInfoCertificates as String] as? [SecCertificate]
+        let certificate = certificates?.first.map { SHA256.hash(data: SecCertificateCopyData($0) as Data).map { String(format: "%02x", $0) }.joined() }
         let hasResources = ["Screenshot_Screenshot.bundle", "KirkScreenshot_KirkScreenshot.bundle"].contains { fm.fileExists(atPath: app.appendingPathComponent("Contents/Resources/" + $0).path) }
         guard hasResources else { throw UpdateError("更新应用缺少语言资源包。") }
-        return UpdateBundle(version: version, minimumOS: minimumOS, team: team)
+        return UpdateBundle(version: version, minimumOS: minimumOS, team: team, certificate: certificate)
     }
     /// 直接读取 Mach-O 头；发行应用不能依赖需安装 Xcode/CLT 的 lipo。
     static func supportsArchitecture(_ executable: URL, cpu: UInt32) throws -> Bool {
@@ -61,9 +66,13 @@ struct UpdateBundle {
         guard count > 0, count <= 64, 8 + count * stride <= data.count else { return false }
         return (0..<count).contains { word(8 + $0 * stride, little: little) == cpu }
     }
-    func requireCompatible(expected: ReleaseVersion, currentTeam: String?) throws {
+    func requireCompatible(expected: ReleaseVersion, currentTeam: String?, currentCertificate: String? = nil) throws {
         guard version == expected else { throw UpdateError("更新包内版本与 Release 标签不一致。") }
         if let currentTeam, team != currentTeam { throw UpdateError("更新签名身份与当前应用不同，不能自动替换。") }
+        // 无 Apple Team ID 的固定自签名也必须延续同一证书，不能降级为 ad-hoc 或换发布者。
+        if currentTeam == nil, let currentCertificate, certificate != currentCertificate {
+            throw UpdateError("更新证书与当前应用不同，已拒绝替换以保护签名身份和已有授权。")
+        }
         let os = ProcessInfo.processInfo.operatingSystemVersion
         let running = try ReleaseVersion("\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)")
         guard minimumOS <= running else { throw UpdateError("新版需要 macOS \(minimumOS) 或更新版本。") }
@@ -180,14 +189,14 @@ enum UpdateInstaller {
             let version = try ReleaseVersion(manifest.version)
             let original = try UpdateBundle.inspect(originalURL)
             guard original.version < version, original.team == manifest.team else { throw UpdateError("当前应用的版本或签名已改变，请重新检查更新。") }
-            try UpdateBundle.inspect(URL(fileURLWithPath: manifest.app)).requireCompatible(expected: version, currentTeam: original.team)
+            try UpdateBundle.inspect(URL(fileURLWithPath: manifest.app)).requireCompatible(expected: version, currentTeam: original.team, currentCertificate: original.certificate)
             try "ready".write(to: root.appendingPathComponent("ready.txt"), atomically: true, encoding: .utf8)
             let deadline = Date().addingTimeInterval(30)
             while kill(manifest.parentPID, 0) == 0 && Date() < deadline { Thread.sleep(forTimeInterval: 0.1) }
             guard kill(manifest.parentPID, 0) != 0 else { throw UpdateError("原应用尚未退出，未进行安装。") }
             try swap(source: URL(fileURLWithPath: manifest.app), destination: UpdatePaths.destination,
                      backupDirectory: UpdatePaths.cache.appendingPathComponent("Backups"), previousDestination: originalURL, validate: { app in
-                try UpdateBundle.inspect(app).requireCompatible(expected: version, currentTeam: original.team)
+                try UpdateBundle.inspect(app).requireCompatible(expected: version, currentTeam: original.team, currentCertificate: original.certificate)
             })
             try "已更新到 \(version)。旧版备份保留在 \(UpdatePaths.cache.appendingPathComponent("Backups").path)。".write(to: UpdatePaths.receipt, atomically: true, encoding: .utf8)
             _ = try UpdateCommand.run("/usr/bin/open", [UpdatePaths.destination.path])

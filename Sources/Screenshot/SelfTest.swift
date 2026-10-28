@@ -219,12 +219,17 @@ import StitchCore
 @MainActor func runStartupSmokeTest(_ delegate: AppDelegate) async throws {
     delegate.configureMenuBar()
     guard let menu = delegate.menuBarMenu else { throw CaptureError.message("启动缺少菜单栏入口") }
-    guard !NSApp.windows.contains(where: { $0.title == "Screenshot · 设置" && $0.isVisible }) else { throw CaptureError.message("启动自动打开了设置") }
+    guard !NSApp.windows.contains(where: { $0.title == "\(ApplicationFlavor.name) · 设置" && $0.isVisible }) else { throw CaptureError.message("启动自动打开了设置") }
     _ = delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
-    guard !NSApp.windows.contains(where: { $0.title == "Screenshot · 设置" && $0.isVisible }) else { throw CaptureError.message("再次启动自动打开了设置") }
+    guard !NSApp.windows.contains(where: { $0.title == "\(ApplicationFlavor.name) · 设置" && $0.isVisible }) else { throw CaptureError.message("再次启动自动打开了设置") }
+    guard menu.items.first?.title == ApplicationFlavor.name else { throw CaptureError.message("菜单未区分开发版与日常版") }
+    if ApplicationFlavor.isDevelopment {
+        guard !menu.items.contains(where: { $0.title == "检查更新…" }) else { throw CaptureError.message("开发版仍提供正式自动更新入口") }
+        guard !UpdatePaths.isInstalledPath(Bundle.main.bundleURL) else { throw CaptureError.message("开发版安装路径被更新器接受") }
+    }
     let settings = menu.items.first { $0.title == localized("settings") }!
     NSApp.sendAction(settings.action!, to: settings.target, from: settings)
-    guard let window = NSApp.windows.first(where: { $0.title == "Screenshot · 设置" }), window.isVisible else { throw CaptureError.message("设置菜单不能打开窗口") }
+    guard let window = NSApp.windows.first(where: { $0.title == "\(ApplicationFlavor.name) · 设置" }), window.isVisible else { throw CaptureError.message("设置菜单不能打开窗口") }
     guard NSApp.mainMenu?.items.first?.submenu?.items.contains(where: { $0.keyEquivalent == "," && $0.target as? AppDelegate === delegate }) == true else { throw CaptureError.message("缺少标准设置快捷键") }
     window.close()
     delegate.permissionAccess = ScreenPermissionAccess(isAuthorized: { false }, request: { fatalError("截图不能隐式申请权限") }, openSettings: {})
@@ -273,7 +278,7 @@ import StitchCore
     delegate.schedulePermissionRequest = { scheduled.append($0) }
     delegate.permissionAccess = ScreenPermissionAccess(isAuthorized: { authorized }, request: { requests += 1; return false }, openSettings: { settingsOpens += 1 })
     delegate.openSettings()
-    let window = NSApp.windows.first { $0.title == "Screenshot · 设置" && $0.isVisible }!
+    let window = NSApp.windows.first { $0.title == "\(ApplicationFlavor.name) · 设置" && $0.isVisible }!
     defer { window.close() }
     func buttons(_ view: NSView) -> [NSButton] { (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(buttons) }
     let request = buttons(window.contentView!).first { $0.title == "申请录屏权限" }!
