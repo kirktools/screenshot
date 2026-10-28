@@ -9,6 +9,12 @@ internal sealed class ScrollSession : IDisposable
     readonly System.Windows.Forms.Timer timer = new() { Interval = 33 };
     readonly PreviewPanel panel; readonly Boundary boundary; readonly Func<Bitmap, FinishMode, bool> output;
     readonly string layout = DisplayLayout(); bool processing, finishing, disposed, blocked; int height; long bytes;
+    internal int CapturedHeight => height;
+    internal bool HasUnmatchedFrame => tracker.HasUnmatchedFrame;
+    internal Rectangle PreviewBounds => panel.Bounds;
+    internal bool Released => disposed && panel.IsDisposed && boundary.IsDisposed && segments.Count == 0;
+    internal bool InFlight => processing;
+    internal void UndoLast() => Undo();
     public Action? Closed;
     static string DisplayLayout() => string.Join(";", Screen.AllScreens.Select(s => $"{s.DeviceName}:{s.Bounds}"));
     public ScrollSession(Rectangle region, Func<Bitmap, FinishMode, bool> output)
@@ -51,6 +57,7 @@ internal sealed class ScrollSession : IDisposable
             });
             using var image = capture.Bitmap;
             if (disposed) return;
+            if (layout != DisplayLayout()) { blocked = true; panel.Error = "显示器布局已变化，请重新框选。"; return; }
             var result = await Task.Run(() => tracker.Consume(capture.Gray, Environment.TickCount64 / 1000d));
             if (disposed) return;
             if (result.Kind is TrackingKind.Seed or TrackingKind.Append)

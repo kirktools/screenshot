@@ -3,6 +3,8 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Security;
+using System.Security.Principal;
 using Screenshot.Core;
 namespace Screenshot.Windows;
 
@@ -11,8 +13,17 @@ internal static class Updates
 {
     static readonly string Root = Path.Combine(Preferences.Folder, "updates");
     static string Hash(string path) { using var file = File.OpenRead(path); return Convert.ToHexString(SHA256.HashData(file)); }
+    internal static bool IsElevated
+    {
+        get { using var identity = WindowsIdentity.GetCurrent(); return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator); }
+    }
+    internal static void EnsureUnelevated()
+    {
+        if (IsElevated) throw new SecurityException("自动更新不在管理员权限下运行。请退出后以普通用户身份重新打开，再检查更新；无需关闭系统安全保护。");
+    }
     public static void MarkStarted(string directory)
     {
+        EnsureUnelevated();
         directory = Path.GetFullPath(directory);
         if (Path.GetDirectoryName(directory) != Path.GetFullPath(Root) || !Guid.TryParseExact(Path.GetFileName(directory), "N", out _) || !File.Exists(Path.Combine(directory, "plan.json"))) throw new InvalidDataException("更新确认目录无效");
         File.WriteAllText(Path.Combine(directory, "started"), "started");
@@ -21,6 +32,7 @@ internal static class Updates
     {
         try
         {
+            if (IsElevated) return;
             if (!Directory.Exists(Root)) return;
             foreach (string folder in Directory.GetDirectories(Root))
             {
@@ -34,6 +46,7 @@ internal static class Updates
     }
     public static async Task<bool> Check(Form owner, CancellationToken cancellation)
     {
+        EnsureUnelevated();
         using var client = new ReleaseClient();
         var bytes = await client.Download(new("https://api.github.com/repos/kirktools/screenshot/releases/latest"), 2 * 1024 * 1024, cancellation);
         var current = typeof(Updates).Assembly.GetName().Version!;
@@ -82,6 +95,7 @@ internal static class Updates
         UpdatePlan? plan = null;
         try
         {
+            EnsureUnelevated();
             directory = Path.GetFullPath(directory);
             if (Path.GetDirectoryName(directory) != Path.GetFullPath(Root) || !Guid.TryParseExact(Path.GetFileName(directory), "N", out _)) throw new InvalidDataException("更新任务目录无效");
             plan = JsonSerializer.Deserialize<UpdatePlan>(File.ReadAllText(Path.Combine(directory, "plan.json"))) ?? throw new InvalidDataException("更新任务无效");
@@ -101,7 +115,7 @@ internal static class Updates
             }
             catch (ArgumentException) { }
             if (File.Exists(Path.Combine(directory, "cancelled"))) return 0;
-            if (Hash(oldExe) != plan.OldHash) throw new InvalidDataException("现有程序在等待期间已变化，未覆盖");
+            if (Hash(oldExe) != plan.OldHash || Hash(newExe) != plan.NewHash) throw new InvalidDataException("更新文件在等待期间已变化，未覆盖");
             PortableInstall.Replace(install, candidate, () =>
             {
                 string executable = Path.Combine(install, "Screenshot.exe");

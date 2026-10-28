@@ -9,6 +9,7 @@ internal static class Program
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
         if (args is ["--apply-update", var folder]) return Updates.Apply(folder);
         if (args is ["--self-test"]) return WindowsSelfTest.Run();
+        if (args is ["--desktop-self-test"]) return DesktopSelfTest.Run();
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000)) { MessageBox.Show("此版本需要 Windows 11 或更新系统。", "Screenshot"); return 1; }
         using var instance = new Mutex(true, @"Local\kirktools." + Profile.Name.Replace(" ", ""), out bool first);
         if (!first) { MessageBox.Show("Screenshot 已在系统托盘运行。", "Screenshot"); return 0; }
@@ -94,6 +95,7 @@ internal sealed class ScreenshotContext : ApplicationContext
     }
     void Settings()
     {
+        if (Busy || disposed) return;
         if (settings != null) { settings.Activate(); return; }
         var form = new Form { Text = "Screenshot · 设置", Size = new(480, 255), StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false }; settings = form;
         Shortcut region = preferences.Region, scrolling = preferences.Scroll;

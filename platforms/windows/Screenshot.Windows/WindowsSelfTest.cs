@@ -7,6 +7,13 @@ internal static class WindowsSelfTest
     {
         try
         {
+            foreach (string json in new[] { "null", "{}", "{\"Region\":null,\"Scroll\":null}", "{\"Region\":{\"Modifiers\":0,\"Key\":0},\"Scroll\":null}" })
+                if (Preferences.Parse(json) != Preferences.Default) throw new Exception("损坏设置未回退默认值");
+            if (Updates.IsElevated)
+            {
+                try { Updates.EnsureUnelevated(); throw new Exception("高权限更新未被拒绝"); }
+                catch (System.Security.SecurityException) { }
+            }
             using var source = new Bitmap(120, 100); using (var g = Graphics.FromImage(source)) { g.Clear(Color.White); g.FillRectangle(Brushes.Blue, 10, 10, 30, 25); }
             using var document = new EditDocument((Bitmap)source.Clone());
             document.Apply(document.State with { Marks = [new(Tool.Redact, new(8, 8), new(45, 40), Color.Red, 4)] });

@@ -30,7 +30,17 @@ internal sealed record Preferences(Shortcut Region, Shortcut Scroll)
     public static readonly string Folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Profile.Name.Replace(" ", ""));
     static string FileName => Path.Combine(Folder, "settings.json");
     public static Preferences Default => new(new(Profile.Development ? 2u | 1u : 2u | 4u, Keys.D2), new(Profile.Development ? 2u | 1u : 2u | 4u, Keys.D7));
-    public static Preferences Load() { try { return System.Text.Json.JsonSerializer.Deserialize<Preferences>(File.ReadAllText(FileName)) ?? Default; } catch { return Default; } }
+    internal static Preferences Parse(string json)
+    {
+        try
+        {
+            var value = System.Text.Json.JsonSerializer.Deserialize<Preferences>(json);
+            static bool Valid(Shortcut? key) => key is not null && key.Modifiers is > 0 and < 16 && (int)key.Key is > 0 and < 256 && key.Key is not (Keys.ControlKey or Keys.ShiftKey or Keys.Menu or Keys.LWin or Keys.RWin);
+            return value is not null && Valid(value.Region) && Valid(value.Scroll) && value.Region != value.Scroll ? value : Default;
+        }
+        catch (System.Text.Json.JsonException) { return Default; }
+    }
+    public static Preferences Load() { try { return Parse(File.ReadAllText(FileName)); } catch (IOException) { return Default; } catch (UnauthorizedAccessException) { return Default; } }
     public void Save() { Directory.CreateDirectory(Folder); string temp = FileName + ".tmp"; File.WriteAllText(temp, System.Text.Json.JsonSerializer.Serialize(this)); File.Move(temp, FileName, true); }
 }
 

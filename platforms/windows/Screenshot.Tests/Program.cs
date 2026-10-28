@@ -54,6 +54,17 @@ try
     File.WriteAllText(Path.Combine(install, "personal.txt"), "preserve");
     try { PortableInstall.Replace(install, candidate, () => throw new IOException("synthetic launch failure")); throw new Exception("rollback did not throw"); } catch (IOException) { }
     Check(PortableInstall.Files.All(file => File.ReadAllText(Path.Combine(install, file)) == "old"), "failed launch rolls back all installed files");
+    try
+    {
+        PortableInstall.Replace(install, candidate, () => { }, (source, target) =>
+        {
+            if (Path.GetFileName(source) == "LICENSE.txt") { File.WriteAllText(target, "partial"); throw new IOException("synthetic interrupted copy"); }
+            File.Copy(source, target);
+        });
+        throw new Exception("interrupted copy should fail");
+    }
+    catch (IOException) { }
+    Check(PortableInstall.Files.All(file => File.ReadAllText(Path.Combine(install, file)) == "old"), "interrupted copy rolls back partial output and original files");
     PortableInstall.Replace(install, candidate, () => { });
     Check(PortableInstall.Files.All(file => File.ReadAllText(Path.Combine(install, file)) == "new"), "portable update replaces expected files");
     Check(File.ReadAllText(Path.Combine(install, "personal.txt")) == "preserve", "update preserves unrelated user files");
