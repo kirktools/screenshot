@@ -26,9 +26,11 @@ Native macOS screenshots with manual scrolling, automatic stitching, and annotat
 
 长图界面只保留预览和图标，出错才显示悬浮提示。撤销、重试、放大等操作在「…」里。
 
-<img src="docs/images/scrolling.gif" alt="合成滚动帧驱动的原生长截图预览" width="250"> <img src="docs/images/scroll-result.png" alt="通过合成帧拼接并逐像素验证的长图示例" width="350">
+<img src="docs/images/screenshot-intro.gif" alt="16 秒功能演示：原位标注、滚动拼接与长图完成" width="800">
 
-<sub>界面由真实原生控件渲染；示例内容为生成素材，不含私人聊天。</sub>
+[观看 MP4 版](docs/images/screenshot-intro.mp4)
+
+<sub>原生界面与合成内容，脚本驱动演示，非鼠标实录；不含私人聊天。</sub>
 
 ## 安装运行
 

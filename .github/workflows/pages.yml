@@ -6,7 +6,7 @@ on:
     paths:
       - 'site/**'
       - 'docs/images/editor.png'
-      - 'docs/images/scrolling.gif'
+      - 'docs/images/screenshot-intro*'
       - 'scripts/*site.py'
       - '.github/workflows/pages.yml'
 permissions:

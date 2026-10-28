@@ -19,6 +19,10 @@ A lightweight, native macOS screenshot tool. Capture a region, scroll to stitch 
 2. Select a region. For a long capture, select the scrollable content and scroll down in the original app.
 3. Press **Return** to copy and finish, or **Esc** to cancel. Choose the pencil to edit a long image or the download button to save it.
 
+![16-second feature demo](docs/images/screenshot-intro.gif)
+
+[MP4 version](docs/images/screenshot-intro.mp4) · Native UI with synthetic content, driven by a script rather than a recording of mouse interactions.
+
 ## Install
 
 Requires **macOS 14+**, Apple Silicon or Intel. Download the DMG from Releases and drag Screenshot into Applications. Screen Recording permission is required; Accessibility and microphone permissions are not.
