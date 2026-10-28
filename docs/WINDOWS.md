@@ -38,6 +38,8 @@ make windows-build                       # x64 自包含 ZIP
 make windows-build WINDOWS_RUNTIME=win-arm64
 ```
 
+再次执行开发运行命令会重启当前工作区的开发副本（未导出的开发截图不会保留），不停止日常版或其他工作区的程序。
+
 等价命令：
 
 ```powershell

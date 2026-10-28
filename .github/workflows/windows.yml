@@ -61,6 +61,39 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw '测试候选版本构建失败' }
           dotnet run --project platforms/windows/Screenshot.ProcessTests -c Release -- "$PWD/.build/windows/${{ matrix.runtime }}-release" "$PWD/.build/update-candidate/Screenshot.exe"
           if ($LASTEXITCODE -ne 0) { throw '真实更新助手进程回归失败' }
+      - name: 开发版连续重建与重启
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $path = [IO.Path]::GetFullPath(".build/windows/${{ matrix.runtime }}-development/Screenshot.exe")
+          function Find-Development {
+            return @(Get-Process -Name Screenshot -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $path })
+          }
+          try {
+            ./scripts/build-windows.ps1 -Runtime '${{ matrix.runtime }}' -Development -Launch
+            if ($LASTEXITCODE -ne 0) { throw '开发版首次构建失败' }
+            $old = $null
+            for ($i = 0; $i -lt 50; $i++) {
+              $found = @(Find-Development)
+              if ($found.Count -eq 1) { $old = $found[0]; break }
+              Start-Sleep -Milliseconds 100
+            }
+            if (!$old) { throw '开发版首次启动失败' }
+            $handle = $old.Handle
+            ./scripts/build-windows.ps1 -Runtime '${{ matrix.runtime }}' -Development -Launch
+            if ($LASTEXITCODE -ne 0 -or !$old.HasExited) { throw '旧开发版未被替换' }
+            $new = $null
+            for ($i = 0; $i -lt 50; $i++) {
+              $found = @(Find-Development)
+              if ($found.Count -eq 1 -and $found[0].Id -ne $old.Id) { $new = $found[0]; break }
+              Start-Sleep -Milliseconds 100
+            }
+            if (!$new) { throw '开发版重新启动失败' }
+            Write-Host 'PASS: development rebuild restarts only the workspace development copy'
+          } finally {
+            foreach ($process in @(Find-Development)) { Stop-Process -Id $process.Id; $process.Dispose() }
+            if ($old) { $old.Dispose() }
+          }
       - name: 检查 Windows 安装包与许可证
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: pwsh
