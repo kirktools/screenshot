@@ -4,6 +4,10 @@
 
 **原生体验 · 本机处理 · 无需账号**
 
+Native macOS screenshots with manual scrolling, automatic stitching, and annotation.
+
+[下载最新版本](https://github.com/kirktools/screenshot/releases/latest) · [English](README.en.md)
+
 <img src="docs/images/editor.png" alt="Screenshot 原位标注与浮动工具栏" width="800">
 
 ## 能做什么

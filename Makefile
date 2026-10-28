@@ -1,3 +1,4 @@
+.PHONY: site site-check site-preview
 .PHONY: dev dev-test signing-test signing-integration-test signing-prepare signing-ci release release-dry-run
 
 # 命令行可覆盖默认值，例如 make release BUMP=minor。
@@ -35,3 +36,13 @@ signing-integration-test:
 # 只在本机生成固定发布身份，不上传。
 signing-prepare:
 	@python3 scripts/configure-ci-signing.py
+
+# 免费静态官网：无需 Node 或第三方构建依赖。
+site:
+	@python3 scripts/build-site.py
+
+site-preview: site
+	@python3 -m http.server 4173 --bind 127.0.0.1 --directory .build/site
+
+site-check: site
+	@python3 scripts/check-site.py
