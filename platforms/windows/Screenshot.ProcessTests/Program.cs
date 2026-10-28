@@ -9,6 +9,11 @@ internal static class Program
 {
     static int Main(string[] args)
     {
+        if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true")
+        {
+            if (args is ["--desktop-test", var app]) return Screenshot.ProcessTests.IsolatedDesktop.Run(Path.GetFullPath(app), ["--desktop-self-test"]);
+            if (args is ["--isolated", .. var rest]) return Screenshot.ProcessTests.IsolatedDesktop.Run(Environment.ProcessPath!, rest);
+        }
         if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true" || args.Length is < 2 or > 3 || (args.Length == 3 && args[2] != "--confirm-test-source")) return 1;
         string root = Path.Combine(Path.GetTempPath(), "ScreenshotUpdateProcess-" + Guid.NewGuid().ToString("N"));
         string install = Path.Combine(root, "current"), candidate = Path.Combine(root, "candidate");
@@ -97,10 +102,13 @@ internal static class Program
             EnumChildWindows(window, (control, _) => { controls.Add(control); return true; }, IntPtr.Zero);
             if (!controls.Any(c => WindowText(c).Contains("Screenshot.exe", StringComparison.OrdinalIgnoreCase))) return true;
             var buttons = controls.Where(c => WindowClass(c) == "Button" && WindowText(c).Replace("&", "") == "Run").ToArray();
-            if (buttons.Length != 1) return true;
+            if (buttons.Length != 1 || !IsWindowEnabled(buttons[0])) return true;
+            SetForegroundWindow(window);
+            if (GetForegroundWindow() != window) return true;
             if (Hash(executable) != expectedHash) throw new Exception("来源确认前测试文件发生变化");
             if (SendMessageTimeout(buttons[0], 0xF5, IntPtr.Zero, IntPtr.Zero, 2, 2000, out _) == IntPtr.Zero)
                 throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            if (IsWindowVisible(window)) return true;
             Console.WriteLine("PASS: normal source confirmation for this verified temporary CI executable only; security settings and checkbox unchanged");
             confirmed = true; return false;
         }, IntPtr.Zero);
@@ -123,6 +131,9 @@ internal static class Program
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetFileInformationByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle file, out FileInformation information);
     static string WindowText(IntPtr window) { var text = new StringBuilder(2048); GetWindowText(window, text, text.Capacity); return text.ToString(); }
     static string WindowClass(IntPtr window) { var text = new StringBuilder(100); GetClassName(window, text, text.Capacity); return text.ToString(); }
+    [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr window);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr window, EnumWindow callback, IntPtr parameter);
     [DllImport("user32.dll", SetLastError = true)] static extern IntPtr SendMessageTimeout(IntPtr window, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
     static string HelperWindows(int pid)
@@ -196,7 +207,7 @@ internal static class Program
             IntPtr memory = Marshal.AllocHGlobal(bytes.Length); Marshal.Copy(bytes, 0, memory, bytes.Length); sids.Add(memory);
             var label = new SidAndAttributes { Sid = memory, Attributes = 0x20 };
             if (!SetTokenInformation(token, 25, ref label, (uint)(Marshal.SizeOf<SidAndAttributes>() + bytes.Length))) Error("设置中等完整性");
-            var startup = new StartupInfo { Size = Marshal.SizeOf<StartupInfo>(), Desktop = @"winsta0\default" };
+            var startup = new StartupInfo { Size = Marshal.SizeOf<StartupInfo>(), Desktop = Screenshot.ProcessTests.IsolatedDesktop.CurrentPath };
             string Quote(string value) => "\"" + value.Replace("\"", "\\\"") + "\"";
             var command = new StringBuilder(string.Join(" ", new[] { executable }.Concat(args).Select(Quote)));
             if (!CreateProcessAsUser(token, executable, command, IntPtr.Zero, IntPtr.Zero, false, 0x400, IntPtr.Zero, Path.GetDirectoryName(executable), ref startup, out var info)) Error("启动受限子进程");

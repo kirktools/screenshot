@@ -49,17 +49,16 @@ jobs:
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: pwsh
         run: |
-          $process = Start-Process '.build/windows/${{ matrix.runtime }}-release/Screenshot.exe' -ArgumentList '--isolated-desktop-self-test' -Wait -PassThru -RedirectStandardOutput '.build/desktop-self-test.log' -RedirectStandardError '.build/desktop-self-test-error.log'
-          Get-Content '.build/desktop-self-test.log', '.build/desktop-self-test-error.log'
-          if ($process.ExitCode -eq 77) { throw 'runner 无交互桌面，真实采集未验证；请使用可用桌面完成验收' }
-          if ($process.ExitCode -ne 0) { throw '实际桌面采集/长图会话回归失败' }
+          dotnet run --project platforms/windows/Screenshot.ProcessTests -c Release -- --desktop-test "$PWD/.build/windows/${{ matrix.runtime }}-release/Screenshot.exe"
+          if ($LASTEXITCODE -eq 77) { throw 'runner 无交互桌面，真实采集未验证；请使用可用桌面完成验收' }
+          if ($LASTEXITCODE -ne 0) { throw '实际桌面采集/长图会话回归失败' }
       - name: 不同版本的真实更新助手进程回归
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: pwsh
         run: |
           dotnet publish platforms/windows/Screenshot.Windows -c Release -r '${{ matrix.runtime }}' --self-contained true -p:Version=999.0.0 -o .build/update-candidate
           if ($LASTEXITCODE -ne 0) { throw '测试候选版本构建失败' }
-          dotnet run --project platforms/windows/Screenshot.ProcessTests -c Release -- "$PWD/.build/windows/${{ matrix.runtime }}-release" "$PWD/.build/update-candidate/Screenshot.exe" --confirm-test-source
+          dotnet run --project platforms/windows/Screenshot.ProcessTests -c Release -- --isolated "$PWD/.build/windows/${{ matrix.runtime }}-release" "$PWD/.build/update-candidate/Screenshot.exe" --confirm-test-source
           if ($LASTEXITCODE -ne 0) { throw '真实更新助手进程回归失败' }
       - name: 开发版连续重建与重启
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
