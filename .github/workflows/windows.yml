@@ -59,7 +59,7 @@ jobs:
         run: |
           dotnet publish platforms/windows/Screenshot.Windows -c Release -r '${{ matrix.runtime }}' --self-contained true -p:Version=999.0.0 -o .build/update-candidate
           if ($LASTEXITCODE -ne 0) { throw '测试候选版本构建失败' }
-          dotnet run --project platforms/windows/Screenshot.ProcessTests -c Release -- "$PWD/.build/windows/${{ matrix.runtime }}-release" "$PWD/.build/update-candidate/Screenshot.exe"
+          dotnet run --project platforms/windows/Screenshot.ProcessTests -c Release -- "$PWD/.build/windows/${{ matrix.runtime }}-release" "$PWD/.build/update-candidate/Screenshot.exe" --confirm-test-source
           if ($LASTEXITCODE -ne 0) { throw '真实更新助手进程回归失败' }
       - name: 开发版连续重建与重启
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}

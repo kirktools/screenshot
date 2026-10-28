@@ -9,7 +9,7 @@ internal static class Program
 {
     static int Main(string[] args)
     {
-        if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true" || args.Length != 2) return 1;
+        if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true" || args.Length is < 2 or > 3 || (args.Length == 3 && args[2] != "--confirm-test-source")) return 1;
         string root = Path.Combine(Path.GetTempPath(), "ScreenshotUpdateProcess-" + Guid.NewGuid().ToString("N"));
         string install = Path.Combine(root, "current"), candidate = Path.Combine(root, "candidate");
         string task = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Screenshot", "updates", Guid.NewGuid().ToString("N"));
@@ -34,12 +34,17 @@ internal static class Program
             }
             if (!File.Exists(Path.Combine(root, "standard-user"))) throw new Exception("未验证普通用户权限，不能绕过高权限更新保护");
             var deadline = DateTime.UtcNow.AddSeconds(40);
-            Process? started = null;
+            Process? started = null; bool confirmedSource = false;
             while (started == null)
             {
                 // 验证生产启动确认与实际进程，不依赖 Shell 是否继承 CI 环境变量。
                 if (File.Exists(Path.Combine(task, "started"))) started = FindOwnedProcess(executable);
                 if (started != null) break;
+                if (args.Length == 3 && !confirmedSource)
+                {
+                    int helper = int.Parse(File.ReadAllText(Path.Combine(root, "helper.pid")));
+                    confirmedSource = ConfirmOwnSource(helper, executable, expected, Path.Combine(task, "Screenshot.Update.exe"), original);
+                }
                 if (DateTime.UtcNow > deadline)
                 {
                     int pid = int.Parse(File.ReadAllText(Path.Combine(root, "helper.pid")));
@@ -73,6 +78,34 @@ internal static class Program
             try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch (IOException) { }
         }
     }
+    // 维护者已授权的隔离 CI 验收：只正常确认当前已校验临时程序，不改变安全策略或复选框。
+    static bool ConfirmOwnSource(int pid, string executable, string expectedHash, string helperPath, string helperHash)
+    {
+        using var helper = Process.GetProcessById(pid);
+        if (!string.Equals(helper.MainModule?.FileName, helperPath, StringComparison.OrdinalIgnoreCase) || Hash(helperPath) != helperHash || Hash(executable) != expectedHash)
+            throw new Exception("来源确认的测试进程或文件已变化");
+        bool confirmed = false;
+        EnumWindows((window, _) =>
+        {
+            GetWindowThreadProcessId(window, out uint owner);
+            if (owner != pid || !IsWindowVisible(window) || WindowText(window) != "Open File - Security Warning" || WindowClass(window) != "#32770") return true;
+            var controls = new List<IntPtr>();
+            EnumChildWindows(window, (control, _) => { controls.Add(control); return true; }, IntPtr.Zero);
+            if (!controls.Any(c => WindowText(c).Contains("Screenshot.exe", StringComparison.OrdinalIgnoreCase))) return true;
+            var buttons = controls.Where(c => WindowClass(c) == "Button" && WindowText(c).Replace("&", "") == "Run").ToArray();
+            if (buttons.Length != 1) return true;
+            if (Hash(executable) != expectedHash) throw new Exception("来源确认前测试文件发生变化");
+            if (SendMessageTimeout(buttons[0], 0xF5, IntPtr.Zero, IntPtr.Zero, 2, 2000, out _) == IntPtr.Zero)
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            Console.WriteLine("PASS: normal source confirmation for this verified temporary CI executable only; security settings and checkbox unchanged");
+            confirmed = true; return false;
+        }, IntPtr.Zero);
+        return confirmed;
+    }
+    static string WindowText(IntPtr window) { var text = new StringBuilder(2048); GetWindowText(window, text, text.Capacity); return text.ToString(); }
+    static string WindowClass(IntPtr window) { var text = new StringBuilder(100); GetClassName(window, text, text.Capacity); return text.ToString(); }
+    [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr window, EnumWindow callback, IntPtr parameter);
+    [DllImport("user32.dll", SetLastError = true)] static extern IntPtr SendMessageTimeout(IntPtr window, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
     static string HelperWindows(int pid)
     {
         var titles = new List<string>();
