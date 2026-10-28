@@ -64,7 +64,8 @@ internal static class DesktopSelfTest
             if (difference > .1)
                 throw new InvalidOperationException("自身测试窗口与 GDI 实际采集不一致，可能存在遮挡、缩放或无交互桌面");
         }
-        Console.WriteLine("PASS: actual GDI region capture matches fixture pixels");
+        Console.WriteLine("PASS: actual GDI region capture includes layered fixture pixels");
+        await TestFrozenSelection(fixture, document, region);
         using (var first = new Hotkeys()) using (var second = new Hotkeys())
         {
             var shortcut = new Shortcut(1 | 2 | 4, Keys.F10);
@@ -75,6 +76,7 @@ internal static class DesktopSelfTest
         Console.WriteLine("PASS: native hotkey registration, conflict and release");
         Bitmap? result = null;
         using var session = new ScrollSession(region, (image, _) => { result = (Bitmap)image.Clone(); return true; });
+        if (Native.GetForegroundWindow() != fixture.Handle) throw new InvalidOperationException("长图控件抢走了目标窗口焦点");
         if (session.PreviewBounds.IntersectsWith(region)) throw new InvalidOperationException("预览进入了采集区域");
         await Wait(() => session.CapturedHeight == region.Height, "采集首帧");
         using (var capture = Capture.ScreenImage(region))
@@ -113,6 +115,32 @@ internal static class DesktopSelfTest
         }
         Console.WriteLine("PASS: real desktop scroll session, reverse recovery, undo, full-pixel stitching and resource release");
     }
+    static async Task TestFrozenSelection(Fixture fixture, Bitmap document, Rectangle region)
+    {
+        Bitmap? result = null;
+        using (var overlay = new Selection(false))
+        {
+            overlay.Selected += (_, image) => result = image;
+            fixture.ScrollTo(30); // 冻结后改变原窗口，框选结果仍必须是原画面。
+            overlay.Show(); overlay.Refresh(); await Task.Delay(100);
+            var a = overlay.PointToClient(new Point(region.Left + 20, region.Top + 20));
+            var b = overlay.PointToClient(new Point(region.Left + 148, region.Top + 120));
+            IntPtr Position(Point p) => (IntPtr)((p.Y << 16) | (p.X & 0xFFFF));
+            SendMessage(overlay.Handle, 0x201, (IntPtr)1, Position(a));
+            SendMessage(overlay.Handle, 0x200, (IntPtr)1, Position(b));
+            SendMessage(overlay.Handle, 0x202, IntPtr.Zero, Position(b));
+        }
+        using (result)
+        using (var expected = Capture.Crop(document, new(20, 20, 128, 100)))
+        {
+            if (result == null || result.Size != expected.Size) throw new InvalidOperationException("冻结框选未生成正确区域");
+            for (int y = 0; y < result.Height; y++) for (int x = 0; x < result.Width; x++)
+                if (result.GetPixel(x, y).ToArgb() != expected.GetPixel(x, y).ToArgb()) throw new InvalidOperationException("框选结果不是冻结时的原始像素");
+        }
+        fixture.ScrollTo(0); fixture.Activate(); fixture.Refresh(); await Task.Delay(100);
+        Console.WriteLine("PASS: native selection uses frozen layered pixels, despite subsequent source changes");
+    }
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
     sealed class Fixture : Form
     {
         readonly Bitmap document; int offset; public int Paints;
@@ -120,7 +148,7 @@ internal static class DesktopSelfTest
         {
             this.document = document;
             AutoScaleMode = AutoScaleMode.None; FormBorderStyle = FormBorderStyle.None;
-            ShowInTaskbar = false; TopMost = true; DoubleBuffered = true; StartPosition = FormStartPosition.Manual;
+            ShowInTaskbar = false; TopMost = true; DoubleBuffered = true; TransparencyKey = Color.Magenta; StartPosition = FormStartPosition.Manual;
         }
         public void ScrollTo(int value) { offset = value; Refresh(); }
         protected override void OnPaint(PaintEventArgs e) { Paints++; e.Graphics.DrawImageUnscaled(document, 0, -offset); }

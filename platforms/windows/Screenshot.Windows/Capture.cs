@@ -13,9 +13,26 @@ internal static class Capture
     {
         if (region.Width < 1 || region.Height < 1 || (long)region.Width * region.Height > MaximumPixels) throw new InvalidOperationException("选区超过 2400 万像素，请缩小区域");
         var image = new Bitmap(region.Width, region.Height, PixelFormat.Format32bppRgb);
-        try { using var g = Graphics.FromImage(image); g.CopyFromScreen(region.Location, Point.Empty, region.Size, CopyPixelOperation.SourceCopy); return image; }
+        try
+        {
+            using var g = Graphics.FromImage(image);
+            IntPtr screen = GetDC(IntPtr.Zero), target = IntPtr.Zero;
+            if (screen == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            try
+            {
+                target = g.GetHdc();
+                // CAPTUREBLT 包含 tooltip 等分层窗口；CopyFromScreen 不接受组合操作码。
+                if (!BitBlt(target, 0, 0, region.Width, region.Height, screen, region.X, region.Y, 0x40CC0020))
+                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            }
+            finally { if (target != IntPtr.Zero) g.ReleaseHdc(target); ReleaseDC(IntPtr.Zero, screen); }
+            return image;
+        }
         catch { image.Dispose(); throw; }
     }
+    [DllImport("user32.dll", SetLastError = true)] static extern IntPtr GetDC(IntPtr window);
+    [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr window, IntPtr dc);
+    [DllImport("gdi32.dll", SetLastError = true)] static extern bool BitBlt(IntPtr target, int x, int y, int width, int height, IntPtr source, int sourceX, int sourceY, uint operation);
     public static GrayFrame Gray(Bitmap image)
     {
         int width = Math.Min(128, image.Width); var pixels = new byte[width * image.Height];
