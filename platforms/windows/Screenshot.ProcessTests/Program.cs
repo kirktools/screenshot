@@ -81,7 +81,9 @@ internal static class Program
     // 维护者已授权的隔离 CI 验收：只正常确认当前已校验临时程序，不改变安全策略或复选框。
     static bool ConfirmOwnSource(int pid, string executable, string expectedHash, string helperPath, string helperHash)
     {
-        using var helper = Process.GetProcessById(pid);
+        Process helper;
+        try { helper = Process.GetProcessById(pid); } catch (ArgumentException) { return false; }
+        using var disposeHelper = helper;
         bool confirmed = false;
         EnumWindows((window, _) =>
         {
@@ -151,7 +153,7 @@ internal static class Program
             {
                 if (!process.HasExited && SameFile(process.MainModule?.FileName, executable)) { found = process; continue; }
             }
-            catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { }
+            catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { } catch (IOException) { } catch (UnauthorizedAccessException) { }
             process.Dispose();
         }
         return found;
@@ -169,7 +171,7 @@ internal static class Program
             if (SameFile(process.MainModule?.FileName, Path.Combine(directory, file)))
             { process.Kill(); process.WaitForExit(5000); }
         }
-        catch (ArgumentException) { } catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { }
+        catch (ArgumentException) { } catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
     static Process StandardUserProcess(string executable, string[] args)
     {
