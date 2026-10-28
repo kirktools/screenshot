@@ -35,15 +35,18 @@ jobs:
       - name: 平台独立算法及更新安全回归
         run: dotnet run --project platforms/windows/Screenshot.Tests -c Release
       - name: 构建自带运行时的便携安装包
+        id: package
         shell: pwsh
         run: ./scripts/build-windows.ps1 -Runtime '${{ matrix.runtime }}'
       - name: Windows 原生编辑、打码、PNG 与剪贴板
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: pwsh
         run: |
           $process = Start-Process '.build/windows/${{ matrix.runtime }}-release/Screenshot.exe' -ArgumentList '--self-test' -Wait -PassThru -RedirectStandardOutput '.build/native-self-test.log' -RedirectStandardError '.build/native-self-test-error.log'
           Get-Content '.build/native-self-test.log', '.build/native-self-test-error.log'
           if ($process.ExitCode -ne 0) { throw '原生导出自测失败' }
       - name: Windows 实际桌面采集与完整长图会话
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: pwsh
         run: |
           $process = Start-Process '.build/windows/${{ matrix.runtime }}-release/Screenshot.exe' -ArgumentList '--isolated-desktop-self-test' -Wait -PassThru -RedirectStandardOutput '.build/desktop-self-test.log' -RedirectStandardError '.build/desktop-self-test-error.log'
@@ -51,6 +54,7 @@ jobs:
           if ($process.ExitCode -eq 77) { throw 'runner 无交互桌面，真实采集未验证；请使用可用桌面完成验收' }
           if ($process.ExitCode -ne 0) { throw '实际桌面采集/长图会话回归失败' }
       - name: 不同版本的真实更新助手进程回归
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: pwsh
         run: |
           dotnet publish platforms/windows/Screenshot.Windows -c Release -r '${{ matrix.runtime }}' --self-contained true -p:Version=999.0.0 -o .build/update-candidate
@@ -58,6 +62,7 @@ jobs:
           dotnet run --project platforms/windows/Screenshot.ProcessTests -c Release -- "$PWD/.build/windows/${{ matrix.runtime }}-release" "$PWD/.build/update-candidate/Screenshot.exe"
           if ($LASTEXITCODE -ne 0) { throw '真实更新助手进程回归失败' }
       - name: 检查 Windows 安装包与许可证
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         shell: pwsh
         run: python scripts/check-windows-package.py --runtime '${{ matrix.runtime }}'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
