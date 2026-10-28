@@ -7,7 +7,7 @@ internal static class Program
     static int Main(string[] args)
     {
         if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true") Console.OutputEncoding = Console.InputEncoding = System.Text.Encoding.UTF8;
-        if (args is ["--isolated-desktop-self-test"]) return TestDesktop.Run(() => Run(["--desktop-self-test"]));
+        if (args is ["--isolated-desktop-self-test"]) return TestDesktop.Run();
         return Run(args);
     }
     static int Run(string[] args)
