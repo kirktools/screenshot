@@ -1,14 +1,7 @@
 name: Website
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'site/**'
-      - 'docs/images/editor.png'
-      - 'docs/images/scrolling.gif'
-      - 'scripts/*site.py'
-      - '.github/workflows/pages.yml'
-      - 'Makefile'
+  # 由正式发布流程调用，使用同一版本标签中的官网源码。
+  workflow_call:
   pull_request:
     paths:
       - 'site/**'
@@ -16,7 +9,6 @@ on:
       - 'docs/images/scrolling.gif'
       - 'scripts/*site.py'
       - '.github/workflows/pages.yml'
-  workflow_dispatch:
 permissions:
   contents: read
 concurrency:

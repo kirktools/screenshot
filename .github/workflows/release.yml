@@ -61,6 +61,8 @@ jobs:
           'dist/Screenshot.app/Contents/MacOS/Screenshot' --update-network-self-test
           'dist/Screenshot.app/Contents/MacOS/Screenshot' --scroll-session-self-test
           scripts/test-dmg.sh
+          # 官网使用固定文件名直链；保留带版本名的原始产物供归档。
+          cp "dist/Screenshot-${{ steps.version.outputs.value }}-macOS.dmg" dist/Screenshot-macOS.dmg
           shasum -a 256 dist/*.zip dist/*.dmg > dist/SHA256SUMS.txt
       - name: ZIP 安装版资源与启动回归
         run: python3 scripts/test-packaged-startup.py
@@ -85,3 +87,12 @@ jobs:
         run: |
           keychain="$RUNNER_TEMP/screenshot-signing/release.keychain-db"
           if [[ -f "$keychain" ]]; then security delete-keychain "$keychain"; fi
+
+  website:
+    name: 发布对应版本官网
+    needs: release
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml

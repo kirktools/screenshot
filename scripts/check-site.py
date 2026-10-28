@@ -30,6 +30,9 @@ assert page.language == 'zh-CN'
 assert '<title>' in source and 'name="description"' in source
 assert 'name="viewport"' in source
 assert '<script' not in source.lower(), '官网不应引入脚本或统计'
+direct_download = 'https://github.com/kirktools/screenshot/releases/latest/download/Screenshot-macOS.dmg'
+assert page.links.count(direct_download) == 2, '两个主下载入口都应直达最新版 DMG'
+assert 'https://github.com/kirktools/screenshot/releases/latest' in page.links, '应保留 Release 页面入口'
 for link in page.links:
     url = urlsplit(link)
     if url.scheme or url.netloc:
