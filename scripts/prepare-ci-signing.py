@@ -4,6 +4,7 @@ import base64
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 
 
@@ -27,6 +28,7 @@ def main():
     folder.mkdir(mode=0o700)
     keychain = folder / 'release.keychain-db'
     keychain.write_bytes(base64.b64decode(encoded, validate=True))
+    previous_search_list = None
     try:
         run(['/usr/bin/security', 'unlock-keychain', '-p', password, keychain])
         run(['/usr/bin/security', 'set-keychain-settings', '-lut', '21600', keychain])
@@ -36,10 +38,18 @@ def main():
         identities = sorted(set(identities))
         if len(identities) != 1:
             raise RuntimeError('发布钥匙串必须恰好包含一个固定代码签名身份。')
+        # 直接写回数据库不会把钥匙串注册到当前用户的搜索列表。
+        # find-identity 的显式路径查询能成功，但 macOS runner 的私钥查找仍会失败。
+        current = shlex.split(run(['/usr/bin/security', 'list-keychains', '-d', 'user']))
+        if str(keychain) not in current:
+            previous_search_list = current
+            run(['/usr/bin/security', 'list-keychains', '-d', 'user', '-s', keychain, *current])
         with open(os.environ['GITHUB_ENV'], 'a') as target:
             target.write(f'SIGN_IDENTITY={identities[0]}\nSIGN_KEYCHAIN={keychain}\nSCREENSHOT_SIGNING_MODE=release\n')
         print('固定发布证书已载入临时钥匙串；未修改系统信任。')
     except BaseException:
+        if previous_search_list is not None:
+            run(['/usr/bin/security', 'list-keychains', '-d', 'user', '-s', *previous_search_list])
         run(['/usr/bin/security', 'lock-keychain', keychain])
         raise
 

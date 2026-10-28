@@ -80,6 +80,28 @@ class SigningTests(unittest.TestCase):
                 ci.main()
         run.assert_not_called()
 
+    def test_ci_registers_restored_keychain_preserving_existing_search_list(self):
+        spec = importlib.util.spec_from_file_location('ci_search_list', Path(__file__).with_name('prepare-ci-signing.py'))
+        ci = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ci)
+        with tempfile.TemporaryDirectory() as folder:
+            temporary = Path(folder)
+            existing = '/synthetic/Other Keychain.keychain-db'
+            registered = []
+            def security(args):
+                if args[1:4] == ['list-keychains', '-d', 'user']:
+                    if len(args) == 4:
+                        return '"' + existing + '"\n'
+                    registered.extend(str(value) for value in args[5:])
+                if args[1] == 'find-identity': return '1) ' + 'A' * 40 + ' "fixture"'
+                return ''
+            environment = {'RUNNER_TEMP': folder, 'GITHUB_ENV': str(temporary / 'ci.env'),
+                'MACOS_SIGNING_KEYCHAIN_BASE64': 'Zml4dHVyZQ==', 'MACOS_SIGNING_PASSWORD': 'synthetic-password'}
+            with mock.patch.dict(os.environ, environment), mock.patch.object(ci, 'run', side_effect=security):
+                ci.main()
+            self.assertEqual(registered, [str(temporary / 'screenshot-signing/release.keychain-db'), existing])
+            self.assertIn('SIGN_IDENTITY=' + 'A' * 40, (temporary / 'ci.env').read_text())
+
     def test_release_identity_preparation_never_uploads_by_default(self):
         spec = importlib.util.spec_from_file_location('configure_ci', Path(__file__).with_name('configure-ci-signing.py'))
         ci = importlib.util.module_from_spec(spec)
