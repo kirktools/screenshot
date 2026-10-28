@@ -24,3 +24,7 @@ docs/VALIDATION.md
 # Python 检查脚本缓存。
 __pycache__/
 *.py[cod]
+
+# Windows/.NET 构建产物
+**/bin/
+**/obj/

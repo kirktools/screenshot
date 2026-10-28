@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings>
+    <Deterministic>true</Deterministic><DebugType>none</DebugType>
+    <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../../VERSION').Trim())</Version>
+    <PathMap>$(MSBuildThisFileDirectory)=/_/windows/</PathMap>
+  </PropertyGroup>
+</Project>

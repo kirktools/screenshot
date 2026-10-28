@@ -1,0 +1,51 @@
+name: Windows
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [win-x64, win-arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: 公开内容检查
+        run: python scripts/check-public-content.py
+      - name: 平台独立算法及更新安全回归
+        if: matrix.runtime == 'win-x64'
+        run: dotnet run --project platforms/windows/Screenshot.Tests -c Release
+      - name: 构建自带运行时的便携安装包
+        shell: pwsh
+        run: ./scripts/build-windows.ps1 -Runtime '${{ matrix.runtime }}'
+      - name: Windows 原生编辑、打码、PNG 与剪贴板
+        if: matrix.runtime == 'win-x64'
+        shell: pwsh
+        run: |
+          $process = Start-Process '.build/windows/win-x64-release/Screenshot.exe' -ArgumentList '--self-test' -Wait -PassThru -RedirectStandardOutput '.build/native-self-test.log' -RedirectStandardError '.build/native-self-test-error.log'
+          Get-Content '.build/native-self-test.log', '.build/native-self-test-error.log'
+          if ($process.ExitCode -ne 0) { throw '原生导出自测失败' }
+      - name: 检查 Windows 安装包与许可证
+        shell: pwsh
+        run: python scripts/check-windows-package.py --runtime '${{ matrix.runtime }}'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-windows-${{ matrix.runtime }}
+          path: |
+            dist/*Windows*.zip
+            dist/SHA256SUMS-Windows-*.txt
+          retention-days: 14

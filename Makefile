@@ -46,3 +46,12 @@ site-preview: site
 
 site-check: site
 	@python3 scripts/check-site.py
+
+.PHONY: windows-dev windows-build windows-test
+WINDOWS_RUNTIME ?= win-x64
+windows-dev:
+	@pwsh -NoProfile -File scripts/build-windows.ps1 -Runtime $(WINDOWS_RUNTIME) -Development -Launch
+windows-build:
+	@pwsh -NoProfile -File scripts/build-windows.ps1 -Runtime $(WINDOWS_RUNTIME)
+windows-test:
+	@dotnet run --project platforms/windows/Screenshot.Tests -c Release

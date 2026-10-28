@@ -2,20 +2,20 @@
 
 [简体中文](README.md)
 
-A lightweight, native macOS screenshot tool. Capture a region, scroll to stitch a long image, and press Return to copy—without opening WeChat.
+A lightweight, native macOS and Windows screenshot tool. Capture a region, scroll to stitch a long image, and press Return to copy—without opening WeChat.
 
 [Download the latest release](https://github.com/kirktools/screenshot/releases/latest)
 
 ![Native in-place editing](docs/images/editor.png)
 
 - **Scrolling screenshots:** scroll downward manually; overlapping content is matched and stitched automatically.
-- **In-place annotation:** arrows, rectangles, ellipses, text, crop, and redaction.
+- **Annotation:** arrows, rectangles, ellipses, text, crop, and redaction.
 - **Quick capture:** lives in the menu bar, with configurable global shortcuts.
 - **Local processing:** no account, no screenshot uploads. Copy the final image or save a PNG.
 
 ## Use
 
-1. Press **⌘⇧2** for a region or **⌘⇧7** for scrolling capture. Shortcuts can be changed in Settings; system conflicts may require a different combination.
+1. Press **⌘⇧2 / 7** on macOS or **Ctrl+Shift+2 / 7** on Windows for region / scrolling capture. Shortcuts can be changed in Settings; system conflicts may require a different combination.
 2. Select a region. For a long capture, select the scrollable content and scroll down in the original app.
 3. Press **Return** to copy and finish, or **Esc** to cancel. Choose the pencil to edit a long image or the download button to save it.
 
@@ -24,6 +24,10 @@ A lightweight, native macOS screenshot tool. Capture a region, scroll to stitch 
 [MP4 version](docs/images/screenshot-intro.mp4) · Native UI with synthetic content, driven by a script rather than a recording of mouse interactions.
 
 ## Install
+
+**Windows 11:** download the x64 or ARM64 ZIP, fully extract it into a writable folder, and run `Screenshot.exe`. The runtime is included. Default shortcuts are Ctrl+Shift+2 / 7. Tray settings and confirmed in-app updates are available. See [Windows usage, limits, and manual acceptance](docs/WINDOWS.md).
+
+**macOS:**
 
 Requires **macOS 14+**, Apple Silicon or Intel. Download the DMG from Releases and drag Screenshot into Applications. Screen Recording permission is required; Accessibility and microphone permissions are not.
 
