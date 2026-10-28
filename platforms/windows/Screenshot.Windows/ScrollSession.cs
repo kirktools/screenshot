@@ -137,10 +137,11 @@ internal sealed class PreviewPanel : Form
     public string? Error { set { error.Text = value ?? ""; error.Visible = !string.IsNullOrEmpty(value); error.BringToFront(); } }
     public PreviewPanel(Rectangle bounds, Action<Graphics, Rectangle, int> draw)
     {
+        SetStyle(ControlStyles.Selectable, false); TabStop = false;
         FormBorderStyle = FormBorderStyle.None; Text = "滚动长截图"; StartPosition = FormStartPosition.Manual; Bounds = bounds; AutoScaleMode = AutoScaleMode.None; ShowInTaskbar = false; TopMost = true; ControlBox = false;
         canvas = new PreviewCanvas(draw) { Dock = DockStyle.Fill }; Controls.Add(canvas);
         var tools = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 48, Padding = new(4), WrapContents = false }; Controls.Add(tools);
-        void Button(string title, string hint, Action action) { var b = new Button { Text = title, Width = 49, Height = 34 }; b.Click += (_, _) => action(); tips.SetToolTip(b, hint); tools.Controls.Add(b); }
+        void Button(string title, string hint, Action action) { var b = new NoFocusButton { Text = title, Width = 49, Height = 34 }; b.Click += (_, _) => action(); tips.SetToolTip(b, hint); tools.Controls.Add(b); }
         Button("✓", "完成并复制（回车）", () => Finish?.Invoke(FinishMode.Copy)); Button("✎", "编辑长图", () => Finish?.Invoke(FinishMode.Edit)); Button("↓", "复制并保存 PNG", () => Finish?.Invoke(FinishMode.Save));
         var menu = new ContextMenuStrip(); menu.Items.Add("重试", null, (_, _) => Retry?.Invoke()); menu.Items.Add("撤销上一段", null, (_, _) => Undo?.Invoke()); menu.Items.Add("跟随末尾", null, (_, _) => canvas.Follow());
         Button("…", "更多操作", () => menu.Show(tools, new Point(0, tools.Height))); Button("×", "取消（Esc）", () => Cancel?.Invoke());
@@ -149,13 +150,22 @@ internal sealed class PreviewPanel : Form
     }
     protected override bool ShowWithoutActivation => true;
     protected override CreateParams CreateParams { get { var p = base.CreateParams; p.ExStyle |= 0x08000000 | 0x80; return p; } }
+    protected override void WndProc(ref Message message)
+    {
+        if (message.Msg == 0x21) { message.Result = (IntPtr)3; return; } // MA_NOACTIVATE：保留按钮点击，不激活窗口。
+        base.WndProc(ref message);
+    }
     public void RefreshImage() => canvas.Invalidate();
     protected override void Dispose(bool disposing) { if (disposing) tips.Dispose(); base.Dispose(disposing); }
+}
+internal sealed class NoFocusButton : Button
+{
+    public NoFocusButton() { SetStyle(ControlStyles.Selectable, false); TabStop = false; }
 }
 internal sealed class PreviewCanvas : Control
 {
     readonly Action<Graphics, Rectangle, int> draw;
-    public PreviewCanvas(Action<Graphics, Rectangle, int> draw) { this.draw = draw; DoubleBuffered = true; ResizeRedraw = true; }
+    public PreviewCanvas(Action<Graphics, Rectangle, int> draw) { this.draw = draw; DoubleBuffered = true; ResizeRedraw = true; SetStyle(ControlStyles.Selectable, false); TabStop = false; }
     int offset = -1;
     protected override void OnPaint(PaintEventArgs e) { e.Graphics.Clear(Color.FromArgb(35, 35, 35)); draw(e.Graphics, ClientRectangle, offset); }
     protected override void OnMouseWheel(MouseEventArgs e) { offset = Math.Max(0, (offset < 0 ? 0 : offset) - e.Delta); Invalidate(); }
