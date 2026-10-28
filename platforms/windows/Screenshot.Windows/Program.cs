@@ -7,6 +7,11 @@ internal static class Program
     static int Main(string[] args)
     {
         if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true") Console.OutputEncoding = Console.InputEncoding = System.Text.Encoding.UTF8;
+        if (args is ["--isolated-desktop-self-test"]) return TestDesktop.Run(() => Run(["--desktop-self-test"]));
+        return Run(args);
+    }
+    static int Run(string[] args)
+    {
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
         if (args is ["--prepare-update-test", var task, var candidate]) return UpdateProcessFixture.Prepare(task, candidate);
         if (args is ["--apply-update", var folder]) return Updates.Apply(folder);

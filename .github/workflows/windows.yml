@@ -46,7 +46,7 @@ jobs:
       - name: Windows 实际桌面采集与完整长图会话
         shell: pwsh
         run: |
-          $process = Start-Process '.build/windows/${{ matrix.runtime }}-release/Screenshot.exe' -ArgumentList '--desktop-self-test' -Wait -PassThru -RedirectStandardOutput '.build/desktop-self-test.log' -RedirectStandardError '.build/desktop-self-test-error.log'
+          $process = Start-Process '.build/windows/${{ matrix.runtime }}-release/Screenshot.exe' -ArgumentList '--isolated-desktop-self-test' -Wait -PassThru -RedirectStandardOutput '.build/desktop-self-test.log' -RedirectStandardError '.build/desktop-self-test-error.log'
           Get-Content '.build/desktop-self-test.log', '.build/desktop-self-test-error.log'
           if ($process.ExitCode -eq 77) { throw 'runner 无交互桌面，真实采集未验证；请使用可用桌面完成验收' }
           if ($process.ExitCode -ne 0) { throw '实际桌面采集/长图会话回归失败' }
