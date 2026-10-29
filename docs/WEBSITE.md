@@ -32,7 +32,7 @@ https://kirktools.github.io/screenshot/
 
 1. 将官网改动按协作流程提交、推送到 `master`。
 2. 打开 Actions → Website → Run workflow，分支选择 `master`。
-3. 工作流确认最新正式版存在 `Screenshot-macOS.dmg` 下载文件后，锁定并构建当前 `master` 的官网源码，部署到原 Pages 地址。
+3. 工作流锁定并构建当前 `master` 的官网源码，部署到原 Pages 地址。下载优先使用最新正式版的 `Screenshot-macOS.dmg`；旧正式版尚无固定名附件时，自动使用该版本实际存在的 `Screenshot-X.Y.Z-macOS.dmg`，构建时同时替换两个主下载按钮。缺少两种附件时停止部署。
 4. 部署完成后检查线上首页；Google 验证标签需要出现在首页 HTML 的 `<head>` 中，再到对应网址前缀资源完成所有权验证。
 
 此入口只更新官网，不构建应用、不创建或修改 Release。其他分支不能使用该手动入口；普通 push 仍不部署，官网 PR 仍只检查，正式发布仍使用对应版本的官网源码。正式发布与手动官网部署共用部署队列，避免互相取消。

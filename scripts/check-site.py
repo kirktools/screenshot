@@ -2,6 +2,7 @@
 """检查静态官网资源、锚点和发布文件范围，不联网。"""
 from html.parser import HTMLParser
 from pathlib import Path
+import os
 from urllib.parse import urlsplit, unquote
 
 root = Path(__file__).resolve().parent.parent / '.build/site'
@@ -35,8 +36,8 @@ assert 'autoplay' not in page.videos[0], '视频由用户主动播放'
 assert '<title>' in source and 'name="description"' in source
 assert 'name="viewport"' in source
 assert '<script' not in source.lower(), '官网不应引入脚本或统计'
-direct_download = 'https://github.com/kirktools/screenshot/releases/latest/download/Screenshot-macOS.dmg'
-assert page.links.count(direct_download) == 2, '两个主下载入口都应直达最新版 DMG'
+direct_download = os.environ.get('SITE_DOWNLOAD_URL') or 'https://github.com/kirktools/screenshot/releases/latest/download/Screenshot-macOS.dmg'
+assert page.links.count(direct_download) == 2, '两个主下载入口都应直达选定的正式版 DMG'
 assert 'https://github.com/kirktools/screenshot/releases/latest' in page.links, '应保留 Release 页面入口'
 for link in page.links:
     url = urlsplit(link)

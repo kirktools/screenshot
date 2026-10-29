@@ -10,6 +10,7 @@ on:
       - 'docs/images/editor.png'
       - 'docs/images/screenshot-intro*'
       - 'scripts/*site.py'
+      - 'scripts/test-site-download.py'
       - '.github/workflows/pages.yml'
 permissions:
   contents: read
@@ -36,19 +37,27 @@ jobs:
           tag = release['tag_name']
           if release['draft'] or release['prerelease'] or not re.fullmatch(r'v\d+\.\d+\.\d+', tag):
               raise SystemExit('需要已发布的正式版本')
-          if 'Screenshot-macOS.dmg' not in {asset['name'] for asset in release['assets']}:
-              raise SystemExit('最新正式版缺少官网所需的固定下载文件')
+          assets = {asset['name'] for asset in release['assets']}
+          if 'Screenshot-macOS.dmg' in assets:
+              download = 'https://github.com/kirktools/screenshot/releases/latest/download/Screenshot-macOS.dmg'
+          elif f'Screenshot-{tag[1:]}-macOS.dmg' in assets:
+              download = f'https://github.com/kirktools/screenshot/releases/download/{tag}/Screenshot-{tag[1:]}-macOS.dmg'
+          else:
+              raise SystemExit('最新正式版缺少可用的 macOS DMG 下载文件')
           source = api('commits/master')['sha']
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write(f'ref={source}\n')
+              output.write(f'ref={source}\ndownload={download}\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write(f'官网模式：仅更新 master 官网\n\n源码：{source}\n\n应用正式版：{tag}\n')
+              summary.write(f'官网模式：仅更新 master 官网\n\n源码：{source}\n\n应用正式版：{tag}\n\n下载：{download}\n')
           PY
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && steps.source.outputs.ref || github.sha }}
           persist-credentials: false
+      - run: python3 scripts/test-site-download.py
       - run: make site-check
+        env:
+          SITE_DOWNLOAD_URL: ${{ steps.source.outputs.download }}
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
         if: github.event_name != 'pull_request'
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
