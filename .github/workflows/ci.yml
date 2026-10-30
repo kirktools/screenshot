@@ -40,6 +40,11 @@ jobs:
         run: python3 scripts/test-install-dev.py
       - name: 算法测试
         run: swift test --enable-code-coverage
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: 共享 Swift 核心与 .NET 适配桥接
+        run: python3 scripts/test-shared-core.py
       # 会话回归以约 30fps 投递帧，必须使用实际分发的优化构建。
       # 未优化的 Intel Debug 会因处理积压丢帧，触发正常的末尾保护确认。
       - name: 构建应用（Release）

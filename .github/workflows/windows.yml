@@ -1,0 +1,112 @@
+name: Windows
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
+      PYTHONUTF8: 1
+      PYTHONIOENCODING: utf-8
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: win-x64
+            os: windows-latest
+          - runtime: win-arm64
+            os: windows-11-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: 公开内容检查
+        run: python scripts/check-public-content.py
+      - name: 安装固定官方 Swift 编译器
+        shell: pwsh
+        run: ./scripts/setup-swift-windows.ps1
+      - name: 编译同一份 Swift 核心与原生桥接
+        shell: pwsh
+        run: ./scripts/build-stitch-core.ps1 -Runtime '${{ matrix.runtime }}'
+      - name: 平台独立算法及更新安全回归
+        run: dotnet run --project platforms/windows/Screenshot.Tests -c Release
+      - name: 构建自带运行时的便携安装包
+        id: package
+        shell: pwsh
+        run: ./scripts/build-windows.ps1 -Runtime '${{ matrix.runtime }}'
+      - name: Windows 原生编辑、打码、PNG 与剪贴板
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $process = Start-Process '.build/windows/${{ matrix.runtime }}-release/Screenshot.exe' -ArgumentList '--self-test' -Wait -PassThru -RedirectStandardOutput '.build/native-self-test.log' -RedirectStandardError '.build/native-self-test-error.log'
+          Get-Content '.build/native-self-test.log', '.build/native-self-test-error.log'
+          if ($process.ExitCode -ne 0) { throw '原生导出自测失败' }
+      - name: Windows 实际桌面采集与完整长图会话
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          dotnet run --project platforms/windows/Screenshot.ProcessTests -c Release -- --desktop-test "$PWD/.build/windows/${{ matrix.runtime }}-release/Screenshot.exe"
+          if ($LASTEXITCODE -eq 77) { throw 'runner 无交互桌面，真实采集未验证；请使用可用桌面完成验收' }
+          if ($LASTEXITCODE -ne 0) { throw '实际桌面采集/长图会话回归失败' }
+      - name: 不同版本的真实更新助手进程回归
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          dotnet publish platforms/windows/Screenshot.Windows -c Release -r '${{ matrix.runtime }}' --self-contained true -p:Version=999.0.0 -o .build/update-candidate
+          if ($LASTEXITCODE -ne 0) { throw '测试候选版本构建失败' }
+          dotnet run --project platforms/windows/Screenshot.ProcessTests -c Release -- --isolated "$PWD/.build/windows/${{ matrix.runtime }}-release" "$PWD/.build/update-candidate/Screenshot.exe" --confirm-test-source
+          if ($LASTEXITCODE -ne 0) { throw '真实更新助手进程回归失败' }
+      - name: 开发版连续重建与重启
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $path = [IO.Path]::GetFullPath(".build/windows/${{ matrix.runtime }}-development/Screenshot.exe")
+          function Find-Development {
+            return @(Get-Process -Name Screenshot -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $path })
+          }
+          try {
+            ./scripts/build-windows.ps1 -Runtime '${{ matrix.runtime }}' -Development -Launch
+            if ($LASTEXITCODE -ne 0) { throw '开发版首次构建失败' }
+            $old = $null
+            for ($i = 0; $i -lt 50; $i++) {
+              $found = @(Find-Development)
+              if ($found.Count -eq 1) { $old = $found[0]; break }
+              Start-Sleep -Milliseconds 100
+            }
+            if (!$old) { throw '开发版首次启动失败' }
+            $handle = $old.Handle
+            ./scripts/build-windows.ps1 -Runtime '${{ matrix.runtime }}' -Development -Launch
+            if ($LASTEXITCODE -ne 0 -or !$old.HasExited) { throw '旧开发版未被替换' }
+            $new = $null
+            for ($i = 0; $i -lt 50; $i++) {
+              $found = @(Find-Development)
+              if ($found.Count -eq 1 -and $found[0].Id -ne $old.Id) { $new = $found[0]; break }
+              Start-Sleep -Milliseconds 100
+            }
+            if (!$new) { throw '开发版重新启动失败' }
+            Write-Host 'PASS: development rebuild restarts only the workspace development copy'
+          } finally {
+            foreach ($process in @(Find-Development)) { Stop-Process -Id $process.Id; $process.Dispose() }
+            if ($old) { $old.Dispose() }
+          }
+      - name: 检查 Windows 安装包与许可证
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        shell: pwsh
+        run: python scripts/check-windows-package.py --runtime '${{ matrix.runtime }}'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-windows-${{ matrix.runtime }}
+          path: |
+            dist/*Windows*.zip
+            dist/SHA256SUMS-Windows-*.txt
+          retention-days: 14

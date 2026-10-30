@@ -2,7 +2,7 @@ import Foundation
 
 /// 与 XCTest 共用同一份测试方法，适用于只有 Command Line Tools 的机器。
 @main struct CoreTestMain {
-    static func main() {
+    static func main() throws {
         let suite = StitchMatcherTests()
         let tests: [(String, () -> Void)] = [
             ("连续滚动不停稳", suite.testContinuousMotionWithoutStableFrames),
@@ -27,6 +27,8 @@ import Foundation
             ("正文与留白", suite.testTextLikePageWithWhitespace)
         ]
         for (name, run) in tests { run(); print("PASS: \(name)") }
-        print("\(tests.count) suites passed")
+        try CrossPlatformVectorsTests().testSharedWindowsVectors()
+        print("PASS: Swift / Windows 共享图像向量")
+        print("\(tests.count + 1) suites passed")
     }
 }

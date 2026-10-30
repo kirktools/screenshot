@@ -74,23 +74,53 @@ jobs:
             dist/*.zip
             dist/*.dmg
             dist/SHA256SUMS.txt
-      - name: 正式发布 Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.value }}
-        run: |
-          gh release create "v$VERSION" dist/*.zip dist/*.dmg dist/SHA256SUMS.txt \
-            --verify-tag --title "Screenshot v$VERSION" \
-            --notes-file docs/RELEASE-NOTES.md --generate-notes
       - name: 清理临时发布钥匙串
         if: always()
         run: |
           keychain="$RUNNER_TEMP/screenshot-signing/release.keychain-db"
           if [[ -f "$keychain" ]]; then security delete-keychain "$keychain"; fi
 
+  windows:
+    if: github.repository == 'kirktools/screenshot' && github.event.deleted == false
+    uses: ./.github/workflows/windows.yml
+    permissions:
+      contents: read
+
+  publish:
+    needs: [release, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: 校验两平台产物完整
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          version = Path('VERSION').read_text().strip()
+          required = [f'Screenshot-{version}-macOS.zip', f'Screenshot-{version}-macOS.dmg', 'Screenshot-macOS.dmg', 'SHA256SUMS.txt']
+          for arch in ['x64', 'arm64']:
+              required += [f'Screenshot-{version}-Windows-{arch}.zip', f'Screenshot-Windows-{arch}.zip', f'SHA256SUMS-Windows-{arch}.txt']
+          if any(not (Path('dist') / name).is_file() for name in required):
+              raise SystemExit('平台产物不完整，拒绝发布')
+          PYTHON
+      - name: 正式发布 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(cat VERSION)
+          gh release create "v$version" dist/*.zip dist/*.dmg dist/SHA256SUMS*.txt \
+            --verify-tag --title "Screenshot v$version" \
+            --notes-file docs/RELEASE-NOTES.md --generate-notes
+
   website:
     name: 发布对应版本官网
-    needs: release
+    needs: publish
     permissions:
       contents: read
       pages: write

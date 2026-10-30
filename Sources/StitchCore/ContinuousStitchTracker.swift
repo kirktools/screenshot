@@ -1,5 +1,3 @@
-import Foundation
-
 public enum TrackingResult: Equatable, Sendable {
     case seed
     case append(rows: Int)

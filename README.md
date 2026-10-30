@@ -1,10 +1,10 @@
 # Screenshot
 
-独立、轻巧的原生 macOS 截图工具。框选、滚动、复制，不必打开微信。
+独立的原生截图工具，支持 macOS 与 Windows 11。框选、滚动、复制，不必打开微信。
 
 **原生体验 · 本机处理 · 无需账号**
 
-Native macOS screenshots with manual scrolling, automatic stitching, and annotation.
+Native macOS and Windows screenshots with manual scrolling, automatic stitching, and annotation.
 
 [下载最新版本](https://github.com/kirktools/screenshot/releases/latest) · [English](README.en.md)
 
@@ -12,15 +12,15 @@ Native macOS screenshots with manual scrolling, automatic stitching, and annotat
 
 ## 能做什么
 
-- **区域截图**：框选后可拖边框调整、直接标注，支持箭头、矩形、圆形、文字、裁剪和打码。
+- **区域截图**：macOS 支持原位调整边框；两端都支持箭头、矩形、圆形、文字、裁剪和打码。
 - **滚动长图**：手动向下滚动，自动拼接；常驻预览，回车直接复制。
-- **随时唤起**：菜单栏常驻，全局快捷键可配置。
+- **随时唤起**：菜单栏 / 系统托盘常驻，全局快捷键可配置。
 - **应用内更新**：菜单中检查 GitHub 正式版，确认后下载、校验并更新。
 - **留在本机**：不注册、不上传，复制或保存为 PNG。
 
 ## 怎么用
 
-1. 按 **⌘⇧2** 普通截图，或 **⌘⇧7** 截长图，移动鼠标预选窗口，单击确认；也可拖动框选区域。
+1. macOS 按 **⌘⇧2 / 7** 截普通图 / 长图，可悬停预选窗口或拖动框选。Windows 按 **Ctrl+Shift+2 / 7** 拖动框选。
 2. 普通截图直接标注；长截图在原应用中向下滚动，预览自动更新。
 3. **回车 / ✓ 复制并结束**，**Esc / × 取消**。长图需要编辑时点铅笔，保存时点下载图标。
 
@@ -30,9 +30,13 @@ Native macOS screenshots with manual scrolling, automatic stitching, and annotat
 
 [观看 MP4 版](docs/images/screenshot-intro.mp4)
 
-<sub>原生界面与合成内容，脚本驱动演示，非鼠标实录；不含私人聊天。</sub>
+<sub>macOS 原生界面与合成内容，脚本驱动演示，非鼠标实录；不含私人聊天。</sub>
 
 ## 安装运行
+
+**Windows 11**：下载 x64 / ARM64 ZIP，完整解压到可写目录后运行 `Screenshot.exe`，无需另装运行时。默认 `Ctrl+Shift+2 / 7`，托盘菜单可配置快捷键及检查更新。Windows 首版界面与 macOS 有差异，详见 [Windows 使用与验收](docs/WINDOWS.md)。
+
+**macOS**：
 
 支持 **macOS 14+**，Apple Silicon / Intel。新版本提供 DMG 安装包：打开后将应用拖入 Applications。也保留 ZIP；旧版没有 DMG 时可使用 ZIP。
 
