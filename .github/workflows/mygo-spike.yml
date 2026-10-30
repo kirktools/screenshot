@@ -1,0 +1,88 @@
+name: MyGo architecture spike
+on:
+  push:
+    branches: [codex/mygo-architecture-spike]
+permissions:
+  contents: read
+jobs:
+  windows-probe:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            runtime: win-x64
+            arch: x64
+          - os: windows-11-arm
+            runtime: win-arm64
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Checkout pinned MyGo fork
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: sorrycc/mygo
+          ref: 8593d227719d4932fea146891ac9f87303d90a24
+          path: .build/mygo-framework
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - name: Public content
+        run: python scripts/check-public-content.py
+      - name: Install pinned official Swift SDK
+        shell: pwsh
+        run: ./scripts/setup-swift-windows.ps1
+      - name: Build existing shared Swift core
+        shell: pwsh
+        run: ./scripts/build-stitch-core.ps1 -Runtime '${{ matrix.runtime }}'
+      - name: Run portable application service tests
+        working-directory: experiments/mygo-architecture
+        run: go test -v ./application
+      - name: Build MyGo probe without .NET
+        shell: pwsh
+        run: |
+          $out = Join-Path $PWD '.build/mygo-probe/${{ matrix.runtime }}'
+          New-Item $out -ItemType Directory -Force | Out-Null
+          Copy-Item "$env:SharedCoreDirectory/*" $out
+          Copy-Item Tests/Fixtures/stitch-vectors.json "$out/vectors.json"
+          Push-Location experiments/mygo-architecture
+          try {
+            go build -trimpath -tags mygo_noinspector -ldflags '-s -w' -o "$out/MyGoProbe.exe" .
+            if ($LASTEXITCODE -ne 0) { throw 'Probe build failed' }
+          } finally { Pop-Location }
+      - name: Real Go to Swift ABI and tracker
+        shell: pwsh
+        run: |
+          & '.build/mygo-probe/${{ matrix.runtime }}/MyGoProbe.exe' core
+          if ($LASTEXITCODE -ne 0) { throw 'Shared core probe failed' }
+      - name: Actual WebView IPC and rendering
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          & '.build/mygo-probe/${{ matrix.runtime }}/MyGoProbe.exe'
+          if ($LASTEXITCODE -ne 0) { throw 'Web UI probe failed' }
+      - name: Actual MyGo drawn UI rendering
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          & '.build/mygo-probe/${{ matrix.runtime }}/MyGoProbe.exe' native
+          if ($LASTEXITCODE -ne 0) { throw 'Native UI probe failed' }
+      - name: Package and inspect isolated probe
+        run: python experiments/mygo-architecture/package.py --directory .build/mygo-probe/${{ matrix.runtime }} --arch ${{ matrix.arch }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: mygo-probe-${{ matrix.arch }}
+          path: |
+            .build/mygo-probe/mygo-probe-${{ matrix.arch }}.zip
+            .build/mygo-probe/mygo-probe-${{ matrix.arch }}.sha256
+          retention-days: 7
