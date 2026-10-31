@@ -46,3 +46,8 @@ site-preview: site
 
 site-check: site
 	@python3 scripts/check-site.py
+
+# 查看最近的本机截图耗时，不上传诊断数据。
+.PHONY: timing
+timing:
+	@python3 scripts/capture-timing.py

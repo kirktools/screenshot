@@ -92,10 +92,13 @@ final class SelectionWindow: NSWindow {
     private var activationObserver: NSObjectProtocol?
     private var deactivationObserver: NSObjectProtocol?
     var completion: ((CGRect?) -> Void)?
-    func begin(candidates: [CGRect]? = nil, frozenCapture: FrozenCapture? = nil) {
+    private var timing: CaptureTiming?
+    func selectionDidDraw() { timing?.mark("selector.first_draw"); timing?.finish("first_draw"); timing = nil }
+    func begin(candidates: [CGRect]? = nil, frozenCapture: FrozenCapture? = nil, timing: CaptureTiming? = nil) {
+        self.timing = timing
         guard windows.isEmpty else { return }
         let screens = NSScreen.screens
-        guard !screens.isEmpty else { let callback = completion; completion = nil; callback?(nil); return }
+        guard !screens.isEmpty else { timing?.finish("no_displays"); self.timing = nil; let callback = completion; completion = nil; callback?(nil); return }
         self.frozenCapture = frozenCapture
         let desktop = screens.reduce(CGRect.null) { $0.union($1.frame) }
         let regions: [CGRect]
@@ -105,6 +108,7 @@ final class SelectionWindow: NSWindow {
             regions = WindowPreselection.regions(from: info, excludingPID: ProcessInfo.processInfo.processIdentifier,
                                                  screenTop: screens.first?.frame.maxY ?? 0, desktop: desktop, screens: screens.map(\.frame))
         }
+        timing?.mark("selector.window_list_end")
         state = RegionSelectionState(candidates: regions)
         state.hover(at: NSEvent.mouseLocation)
         for screen in screens {
@@ -161,6 +165,7 @@ final class SelectionWindow: NSWindow {
         guard !windows.isEmpty else { return }
         let selection = state.selection
         guard cancel || state.canConfirmSelection else { return }
+        timing?.finish(cancel ? "cancelled_before_draw" : "confirmed_before_draw"); timing = nil
         let result: CGRect? = cancel ? nil : selection
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor); self.keyMonitor = nil }
         if let activationObserver { NotificationCenter.default.removeObserver(activationObserver); self.activationObserver = nil }
@@ -220,6 +225,7 @@ final class SelectionView: NSView {
             }
             CaptureOutline.draw(rect.insetBy(dx: 2, dy: 2))
         }
+        defer { owner?.selectionDidDraw() }
         let help = "单击选择高亮窗口 · 拖动自选区域 · Esc 取消 · 长图请避开固定栏"
         (help as NSString).draw(at: CGPoint(x: 28, y: bounds.height - 70), withAttributes: [.font: NSFont.systemFont(ofSize: 17, weight: .medium), .foregroundColor: NSColor.white])
     }

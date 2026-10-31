@@ -42,7 +42,14 @@ struct Shortcut: Codable, Equatable {
             let result = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &id)
             guard result == noErr, id.signature == 0x4B49524B else { return OSStatus(eventNotHandledErr) }
             let registry = Unmanaged<HotkeyRegistry>.fromOpaque(pointer).takeUnretainedValue()
-            MainActor.assumeIsolated { registry.actions[id.id]?() }
+            MainActor.assumeIsolated {
+                let name = registry.ids.first(where: { $0.value == id.id })?.key ?? ""
+                if name == "screenshot.region" || name == "screenshot.scroll" {
+                    let timing = CaptureTiming(source: name == "screenshot.region" ? "hotkey.normal" : "hotkey.scroll")
+                    timing.mark("hotkey.callback", value: max(0, GetCurrentEventTime() - GetEventTime(event)) * 1000)
+                    CaptureTiming.$current.withValue(timing) { registry.actions[id.id]?() }
+                } else { registry.actions[id.id]?() }
+            }
             return noErr
         }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &handler)
         if status != noErr { lastError = "无法安装快捷键事件处理器（\(status)）" }

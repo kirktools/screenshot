@@ -54,8 +54,11 @@ enum CaptureError: LocalizedError {
     }
     static func invalidateSelectionContent() { recentContent = nil }
     func prepareForSelection() async throws {
+        CaptureTiming.current?.mark("metadata.begin")
         let now = ProcessInfo.processInfo.systemUptime
         if let cached = Self.recentContent, cached.layout == Self.layout, now - cached.time < 30 {
+            CaptureTiming.current?.mark("metadata.cache_hit")
+            CaptureTiming.current?.mark("metadata.end")
             content = cached.value
             screenSnapshot = Dictionary(uniqueKeysWithValues: NSScreen.screens.compactMap { screen in
                 guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { return nil }
@@ -63,7 +66,9 @@ enum CaptureError: LocalizedError {
             })
             return
         }
+        CaptureTiming.current?.mark("metadata.cache_miss")
         try await prepare()
+        CaptureTiming.current?.mark("metadata.end")
     }
     private var content: SCShareableContent?
     private var screenSnapshot: [CGDirectDisplayID: CGRect] = [:]
@@ -130,10 +135,13 @@ enum CaptureError: LocalizedError {
             config.width = Int((part.width * scale).rounded()); config.height = Int((part.height * scale).rounded())
             config.showsCursor = false; config.scalesToFit = true
             let filter = SCContentFilter(display: display, excludingApplications: excluded, exceptingWindows: [])
+            CaptureTiming.current?.mark("screen.capture_begin")
             let shot = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            CaptureTiming.current?.mark("screen.capture_end")
             ctx.draw(shot, in: CGRect(x: (part.minX - region.minX) * scale, y: (part.minY - region.minY) * scale,
                                      width: part.width * scale, height: part.height * scale))
         }
+        CaptureTiming.current?.mark("screen.compose_end")
         guard let image = ctx.makeImage() else { throw CaptureError.message("无法生成截图") }
         return image
     }

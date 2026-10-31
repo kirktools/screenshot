@@ -262,13 +262,18 @@ struct ScreenPermissionAccess {
     @objc private func normalCapture() { capture(scrolling: false) }
     @objc private func scrollCapture() { capture(scrolling: true) }
     func capture(scrolling: Bool) {
-        guard !busy && !installingUpdate else { return }
+        let timing = CaptureTiming.current ?? CaptureTiming(source: scrolling ? "action.scroll" : "action.normal")
+        timing.mark("capture.enter")
+        guard !busy && !installingUpdate else { timing.finish("busy"); return }
+        timing.mark("permission.begin")
         guard permissionAccess.isAuthorized() else {
+            timing.finish("permission_required")
             // 明确按下截图键就直接请求系统，不在桌面叠加自建权限提示。
             // 仅合并尚在调度的请求；不启动计时重试或自动打开任何设置。
             requestScreenPermission()
             return
         }
+        timing.mark("permission.end")
         busy = true
         let frontmost = NSWorkspace.shared.frontmostApplication
         previousApp = frontmost?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? lastExternalApp : frontmost
@@ -276,7 +281,11 @@ struct ScreenPermissionAccess {
         Task { @MainActor [self] in
             do {
                 // 切勿在拍下悬浮提示之前显示选区或激活本应用。
-                let frozen = scrolling ? nil : try await freezeSelection()
+                timing.mark("freeze.begin")
+                let frozen: FrozenCapture? = try await CaptureTiming.$current.withValue(timing) {
+                    scrolling ? nil : try await freezeSelection()
+                }
+                timing.mark("freeze.end")
                 let selector = RegionSelector(); self.selector = selector
                 selector.completion = { [weak self] rect in
                     guard let self else { return }
@@ -305,8 +314,11 @@ struct ScreenPermissionAccess {
                         } catch { self.busy = false; self.provider = nil; showError(error) }
                     }
                 }
-                selector.begin(frozenCapture: frozen)
+                timing.mark("selector.begin")
+                selector.begin(frozenCapture: frozen, timing: timing)
+                timing.mark("selector.begin_returned")
             } catch {
+                timing.finish("capture_failed")
                 self.busy = false
                 showError(CaptureError.message("\(error.localizedDescription)\n若刚授予屏幕录制权限，请退出应用后重新打开。"))
             }

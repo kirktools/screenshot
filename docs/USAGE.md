@@ -121,3 +121,13 @@ MIT License，Copyright © 2026 **kirktools**。
 应用展示名、窗口及安装包内的应用统一为 **Screenshot**，固定安装路径为 `/Applications/Screenshot.app`。Bundle ID 仍是 `com.kirktools.screenshot`，快捷键偏好保留；组织名和仓库仍为 kirktools/screenshot。新 ZIP/DMG 使用 `Screenshot-版本-macOS`；更新器仍可读取旧的 `Kirk-Screenshot-版本-macOS.zip` 资源。
 
 日常版旧安装迁移器检测到仅有旧的 `/Applications/Kirk Screenshot.app` 时，验证应用身份、备份后迁移到新路径；失败恢复旧名称，不同时保留两份。若新旧两份均存在，或新路径属于其他应用，会停止并说明原因，不覆盖其他软件。手动拖入 DMG 时也应先退出并备份旧版，避免留下两份。路径和 ad-hoc 签名变化后，macOS 仍可能要求重新录屏授权；安装器不重置权限。`make dev` 只更新独立开发版，不参与日常版迁移。
+
+### 截图响应耗时
+
+开发版自动记录本机阶段耗时，运行 `make timing` 查看最近 10 次。可用 `python3 scripts/capture-timing.py --slow-ms 200 --last 20` 筛选慢请求。
+
+日志在 `~/Library/Logs/Screenshot Dev/capture-timing.jsonl`，约 1 MB 轮转、另保留一份备份。仅记录时间、阶段、缓存命中和随机进程会话标识，不记录像素、窗口标题、应用列表、路径、输入内容，也不上传。可删除这些文件清理记录。
+
+阶段覆盖快捷键回调、权限预检、主线程任务进入、元数据查询、逐屏采集及合成、窗口列表、选区首次绘制。各行 `+ms` 是距离上一个阶段的间隔；`hotkey.callback` 的事件排队值来自系统事件时间戳，不等于手指按键到屏幕亮起的硬件延迟。`selector.first_draw` 只表示首个选区视图完成绘制，不保证所有显示器都已经呈现。失败或忙碌请求有独立结果标签。
+
+正式版默认不记录。排查时可执行 `defaults write com.kirktools.screenshot diagnostics.captureTiming -bool true` 后重启开启，日志位于 `~/Library/Logs/Screenshot/`；设为 `false` 并重启关闭。日志写入在独立队列进行，不在采集关键路径同步写盘。
