@@ -23,6 +23,13 @@ public enum MatchResult: Equatable, Sendable {
     case changedContent
 }
 
+/// 正数表示视口向文档底部移动，负数表示向顶部移动；只报告通过完整重叠校验的位移。
+public enum VerticalMatchResult: Equatable, Sendable {
+    case unchanged
+    case translated(rows: Int)
+    case rejected(MatchResult)
+}
+
 public struct StitchMatcher: Sendable {
     public init() {}
     public func difference(_ a: GrayFrame, _ b: GrayFrame) -> Double {
@@ -30,13 +37,20 @@ public struct StitchMatcher: Sendable {
         return denseError(a, b, shift: 0)
     }
     public func match(previous a: GrayFrame, next b: GrayFrame) -> MatchResult {
-        guard a.width == b.width, a.height == b.height, a.sourceWidth == b.sourceWidth else { return .incompatibleSize }
-        guard a.height >= 80, a.width >= 16 else { return .insufficientOverlap }
+        switch verticalMatch(previous: a, next: b) {
+        case .unchanged: return .duplicate
+        case .translated(let rows): return rows > 0 ? .append(rows: rows) : .reverse
+        case .rejected(let reason): return reason
+        }
+    }
+    public func verticalMatch(previous a: GrayFrame, next b: GrayFrame) -> VerticalMatchResult {
+        guard a.width == b.width, a.height == b.height, a.sourceWidth == b.sourceWidth else { return .rejected(.incompatibleSize) }
+        guard a.height >= 80, a.width >= 16 else { return .rejected(.insufficientOverlap) }
         // 全图均值很小也可能是稀疏文字在移动，须同时检查显著变化的像素比例。
         if difference(a, b) < 0.6 {
             var changed = 0
             for i in a.pixels.indices where abs(Int(a.pixels[i]) - Int(b.pixels[i])) > 3 { changed += 1 }
-            if changed <= max(1, a.pixels.count / 10_000) { return .duplicate }
+            if changed <= max(1, a.pixels.count / 10_000) { return .unchanged }
         }
         let limit = Int(Double(a.height) * 0.78)
         // 原始纵向像素搜索；每条候选行检查所有列，再对最佳候选做全重叠校验。
@@ -47,7 +61,7 @@ public struct StitchMatcher: Sendable {
             coarse.append((shift, error(a, b, shift: shift, rows: rows)))
         }
         let ordered = coarse.sorted { $0.1 < $1.1 }
-        guard let first = ordered.first, first.1 < 12 else { return .insufficientOverlap }
+        guard let first = ordered.first, first.1 < 12 else { return .rejected(.insufficientOverlap) }
         let seeds = ordered.prefix(24)
         var candidates: [Int: Double] = [:]
         for (seed, _) in seeds {
@@ -56,11 +70,11 @@ public struct StitchMatcher: Sendable {
             }
         }
         let ranked = candidates.sorted { $0.value < $1.value }
-        guard let best = ranked.first else { return .insufficientOverlap }
-        guard best.value < 3.0 else { return .insufficientOverlap }
+        guard let best = ranked.first else { return .rejected(.insufficientOverlap) }
+        guard best.value < 3.0 else { return .rejected(.insufficientOverlap) }
         // 周期性内容可能出现多个同样好的位移；保守拒绝，而不是猜。
         if ranked.contains(where: { abs($0.key - best.key) > max(4, step * 2) && $0.value <= best.value * 1.15 + 0.0001 }) {
-            return .ambiguous
+            return .rejected(.ambiguous)
         }
         // 对接缝外的静止顶栏、动画或局部改变再做逐带校验。
         let shift = best.key
@@ -83,10 +97,10 @@ public struct StitchMatcher: Sendable {
             }
             // 不能让大面积相同背景掩盖文字差异；误差还须小于局部字形信号。
             if count > 0 && (sum / Double(count) > 5 || excess > signal * 0.3) {
-                return .changedContent
+                return .rejected(.changedContent)
             }
         }
-        return shift > 0 ? .append(rows: shift) : .reverse
+        return .translated(rows: shift)
     }
     /// 每个纵向小区间保留最有横向纹理的两行，避免固定网格恰好落在字间留白。
     private func informativeRows(_ frame: GrayFrame) -> [Int] {

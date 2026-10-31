@@ -161,9 +161,9 @@ func compose(_ pieces: [StitchPiece]) -> CGImage? {
 }
 
 /// cropping 会共享原图存储，重新绘制后只保留新增条带，避免每次微小滚动保存整屏。
-func copiedStrip(_ image: CGImage, rows: Int) -> CGImage? {
+func copiedStrip(_ image: CGImage, rows: Int, fromTop: Bool = false) -> CGImage? {
     guard rows > 0, rows <= image.height,
-          let crop = image.cropping(to: CGRect(x: 0, y: image.height - rows, width: image.width, height: rows)),
+          let crop = image.cropping(to: CGRect(x: 0, y: fromTop ? 0 : image.height - rows, width: image.width, height: rows)),
           let context = CGContext(data: nil, width: image.width, height: rows, bitsPerComponent: 8, bytesPerRow: 0,
                                   space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
     context.draw(crop, in: CGRect(x: 0, y: 0, width: image.width, height: rows))

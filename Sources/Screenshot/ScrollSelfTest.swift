@@ -28,6 +28,15 @@ import UniformTypeIdentifiers
     func makeStream(_ region: CGRect) async throws -> any RegionFrameStream { source }
 }
 
+@MainActor private final class CompositionPause {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var entered = false
+    private(set) var returned = false
+    func wait() async { entered = true; await withCheckedContinuation { continuation = $0 } }
+    func release() { continuation?.resume(); continuation = nil }
+    func markReturned() { returned = true }
+}
+
 @MainActor func runScrollSessionSelfTest() async throws {
     func require(_ condition: Bool, _ message: String) throws {
         if !condition { throw CaptureError.message(message) }
@@ -133,7 +142,7 @@ import UniformTypeIdentifiers
     otherProvider.source.send(image(40))
     try await wait { other.diagnosticSnapshot.count == 2 }
     try require(!other.diagnosticSnapshot.pending, "短暂失配未恢复")
-    otherProvider.source.send(image(0))
+    otherProvider.source.send(image(700))
     try await wait { other.diagnosticSnapshot.paused }
     try require(other.diagnosticNotice.visible && !other.diagnosticNotice.text.isEmpty, "明确失配后没有悬浮提示")
     try require(other.diagnosticNotice.panelFrame == stableLayout.panelFrame && other.diagnosticNotice.previewFrame == stableLayout.previewFrame,
@@ -201,7 +210,70 @@ import UniformTypeIdentifiers
     try await Task.sleep(for: .milliseconds(100))
     try require(callbacks == 1 && cancelled.diagnosticSnapshot.count == 0 && cancelled.diagnosticSnapshot.bytes == 0,
                 "取消后旧结果写回或资源未释放")
-    print("47 moving frames at ~30fps: exact RGBA, drain, recovery, compact controls, direct PNG copy, explicit edit/save and partial confirmation verified")
+    // 从文档中部开始，向上、向下越过原始范围；往返范围内的内容只保存一次。
+    let bidirectionalProvider = FixtureProvider()
+    let bidirectional = ScrollSession(provider: bidirectionalProvider, region: region, hotkeys: HotkeyRegistry(), clipboard: clipboard)
+    defer { bidirectional.cancelCapture() }
+    var bidirectionalDone = false, bidirectionalImage: CGImage?
+    bidirectional.completion = { image, _ in bidirectionalImage = image; bidirectionalDone = true }
+    _ = bidirectional.start(registerHotkeys: false, showPanel: false)
+    try await Task.sleep(for: .milliseconds(30))
+    for (offset, rows) in [(300, 240), (240, 300), (160, 380), (280, 380), (400, 480), (250, 480), (140, 500)] {
+        bidirectionalProvider.source.send(image(offset))
+        if bidirectional.diagnosticSnapshot.height != rows { try await wait { bidirectional.diagnosticSnapshot.height == rows } }
+        // 回看帧不增加条带，仍需让后台完成坐标更新。
+        try await Task.sleep(for: .milliseconds(60))
+    }
+    try require(bidirectional.diagnosticPreview.originY == 0, "向上补图后预览未跟随顶部")
+    bidirectional.undo()
+    try require(bidirectional.diagnosticSnapshot.height == 480, "撤销向上片段错误地删除底部")
+    bidirectionalProvider.source.send(image(180))
+    try await Task.sleep(for: .milliseconds(100))
+    try require(bidirectional.diagnosticSnapshot.height == 480, "撤销后回看产生重复内容")
+    bidirectionalProvider.source.send(image(120))
+    try await wait { bidirectional.diagnosticSnapshot.height == 520 }
+    bidirectional.finishCapture(); try await wait { bidirectionalDone }
+    let expectedBidirectional = document.cropping(to: CGRect(x: 0, y: 120, width: width, height: 520))!
+    guard let bidirectionalImage else { throw CaptureError.message("双向会话没有输出") }
+    try require(rgba(bidirectionalImage) == rgba(expectedBidirectional), "双向输出存在重行、漏行或方向颠倒")
+    try require(clipboard.data(forType: .png) == bidirectionalImage.png(), "双向结果未完整复制")
+
+    // 一次性突发投递，消费者尚未运行时必然超过队列容量；末帧不能被旧帧取代。
+    let burstProvider = FixtureProvider()
+    let burst = ScrollSession(provider: burstProvider, region: region, hotkeys: HotkeyRegistry(), clipboard: clipboard)
+    defer { burst.cancelCapture() }
+    var burstDone = false, burstImage: CGImage?
+    burst.completion = { image, _ in burstImage = image; burstDone = true }
+    _ = burst.start(registerHotkeys: false, showPanel: false)
+    try await Task.sleep(for: .milliseconds(30))
+    burstProvider.source.send(image(0)); try await wait { burst.diagnosticSnapshot.count == 1 }
+    for offset in stride(from: 7, through: 140, by: 7) { burstProvider.source.send(image(offset)) }
+    burst.finishCapture(); try await wait { burstDone }
+    let expectedBurst = document.cropping(to: CGRect(x: 0, y: 0, width: width, height: 380))!
+    guard let burstImage else { throw CaptureError.message("突发帧会话未完成") }
+    try require(rgba(burstImage) == rgba(expectedBurst), "慢消费者未保留最后一帧或末段未排空")
+
+    // 在后台合成已经开始、尚未返回时取消，迟到结果不能写剪贴板或二次回调。
+    let latch = CompositionPause(), lateProvider = FixtureProvider()
+    let late = ScrollSession(provider: lateProvider, region: region, hotkeys: HotkeyRegistry(), clipboard: clipboard,
+        composeImage: { pieces in
+            await latch.wait()
+            let result = compose(pieces)
+            await latch.markReturned(); return result
+        })
+    var lateCallbacks = 0
+    late.completion = { image, _ in lateCallbacks += 1; if image != nil { fatalError("取消后输出了合成结果") } }
+    _ = late.start(registerHotkeys: false, showPanel: false)
+    try await Task.sleep(for: .milliseconds(30))
+    lateProvider.source.send(image(0)); try await wait { late.diagnosticSnapshot.count == 1 }
+    let beforeLate = clipboard.data(forType: .png)
+    late.finishCapture(); try await wait { latch.entered }
+    late.cancelCapture(); late.cancelCapture(); latch.release()
+    try await wait { latch.returned }
+    try await Task.sleep(for: .milliseconds(50))
+    try require(lateCallbacks == 1 && clipboard.data(forType: .png) == beforeLate && late.diagnosticSnapshot.bytes == 0,
+                "合成中取消未阻断迟到输出或未释放片段")
+    print("连续帧、双向扩展/往返去重/向上撤销逐像素一致；突发队列末帧排空、合成中取消、PNG复制、编辑/保存和异常确认通过")
 }
 
 /// 真正经过窗口合成器和 SCStream 的集成测试。独立测试进程绘制并连续滚动，不读取用户聊天。

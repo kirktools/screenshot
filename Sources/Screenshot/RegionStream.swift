@@ -46,6 +46,10 @@ private final class StreamGate: @unchecked Sendable {
         let output = self
         let cleanup = Task {
             if let retained { try? await retained.stopCapture(); try? retained.removeStreamOutput(output, type: .screen) }
+            // 已获准的最后一帧可能仍在回调队列中复制；先排空，再关闭消费者队列。
+            await withCheckedContinuation { continuation in
+                self.queue.async { continuation.resume() }
+            }
             self.stream = nil; self.continuation.finish()
         }
         stopTask = cleanup

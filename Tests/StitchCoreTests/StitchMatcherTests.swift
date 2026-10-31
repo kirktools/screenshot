@@ -5,6 +5,10 @@ func XCTAssertEqual<T: Equatable>(_ a: T, _ b: T, _ message: String = "") {
     guard a == b else { fatalError("断言失败：\(a) != \(b) \(message)") }
 }
 func XCTAssertFalse(_ value: Bool) { guard !value else { fatalError("断言失败：预期 false") } }
+func XCTAssertTrue(_ value: Bool) { guard value else { fatalError("断言失败：预期 true") } }
+func XCTAssertNil<T>(_ value: T?) { guard value == nil else { fatalError("断言失败：预期 nil") } }
+func XCTAssertNotNil<T>(_ value: T?) { guard value != nil else { fatalError("断言失败：预期非 nil") } }
+func XCTFail(_ message: String) { fatalError(message) }
 #else
 import XCTest
 #endif

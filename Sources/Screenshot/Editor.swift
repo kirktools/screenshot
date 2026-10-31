@@ -324,7 +324,11 @@ extension NSAffineTransform {
         let done = icon("checkmark", "复制并完成 ↩", target: self, action: #selector(completeEditing))
         done.contentTintColor = .systemGreen; cancel.contentTintColor = .systemRed
         var controls: [NSView] = [info, tools, undo, redo]
-        if allowScroll { controls.append(icon("arrow.down.square", "滚动长截图（重新采集选区）", target: self, action: #selector(beginScroll))) }
+        if allowScroll {
+            let button = icon("arrow.up.and.down", "滚动长截图（重新采集选区）", target: self, action: #selector(beginScroll))
+            button.image = CaptureIcons.scrollCapture
+            controls.append(button)
+        }
         controls += [save, cancel, done]
         let mainRow = NSStackView(views: controls); mainRow.spacing = 8
         var styles: [NSView] = [NSTextField(labelWithString: "颜色")]

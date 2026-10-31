@@ -232,10 +232,11 @@ import StitchCore
     guard let window = NSApp.windows.first(where: { $0.title == "\(ApplicationFlavor.name) · 设置" }), window.isVisible else { throw CaptureError.message("设置菜单不能打开窗口") }
     guard NSApp.mainMenu?.items.first?.submenu?.items.contains(where: { $0.keyEquivalent == "," && $0.target as? AppDelegate === delegate }) == true else { throw CaptureError.message("缺少标准设置快捷键") }
     window.close()
-    delegate.permissionAccess = ScreenPermissionAccess(isAuthorized: { false }, request: { fatalError("截图不能隐式申请权限") }, openSettings: {})
+    delegate.permissionAccess = ScreenPermissionAccess(isAuthorized: { false }, request: { false }, openSettings: {}, wasRequested: { true }, recordRequest: {})
+    delegate.schedulePermissionRequest = { $0() }
     delegate.capture(scrolling: false)
-    for _ in 0..<40 where !delegate.hasVisiblePermissionHint { try await Task.sleep(for: .milliseconds(50)) }
-    guard !window.isVisible, delegate.hasVisiblePermissionHint else { throw CaptureError.message("未授权截图没有轻量提示，或擅自弹出设置：" + delegate.permissionHintDiagnostics) }
+    delegate.capture(scrolling: false)
+    guard !window.isVisible, !delegate.hasVisiblePermissionHint else { throw CaptureError.message("未授权截图叠加了应用提示或打开设置：" + delegate.permissionHintDiagnostics) }
     delegate.dismissPermissionHint()
     _ = delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: true)
     guard !window.isVisible else { throw CaptureError.message("重开应用弹出了设置") }
@@ -276,7 +277,7 @@ import StitchCore
     var authorized = false, requests = 0, settingsOpens = 0
     var scheduled: [() -> Void] = []
     delegate.schedulePermissionRequest = { scheduled.append($0) }
-    delegate.permissionAccess = ScreenPermissionAccess(isAuthorized: { authorized }, request: { requests += 1; return false }, openSettings: { settingsOpens += 1 })
+    delegate.permissionAccess = ScreenPermissionAccess(isAuthorized: { authorized }, request: { requests += 1; return false }, openSettings: { settingsOpens += 1 }, wasRequested: { false }, recordRequest: {})
     delegate.openSettings()
     let window = NSApp.windows.first { $0.title == "\(ApplicationFlavor.name) · 设置" && $0.isVisible }!
     defer { window.close() }
@@ -288,23 +289,50 @@ import StitchCore
     NSApp.sendAction(request.action!, to: request.target, from: request)
     try require(scheduled.count == 1, "重复点击创建了多个授权任务")
     scheduled.removeFirst()()
-    try require(requests == 1 && settingsOpens == 0 && request.isEnabled && request.title == "重新检查权限", "重复触发系统请求，或请求结束后按钮未恢复")
+    try require(requests == 1 && settingsOpens == 0 && request.isEnabled && request.title == "重新申请录屏权限", "重复触发系统请求，或请求结束后按钮未恢复")
     request.performClick(nil)
-    try require(requests == 1 && settingsOpens == 0 && NSApp.modalWindow == nil, "拒绝后再次申请仍弹出模态对话框")
+    try require(scheduled.count == 1 && requests == 1 && settingsOpens == 0 && NSApp.modalWindow == nil, "显式重试没有异步请求系统")
+    scheduled.removeFirst()()
+    try require(requests == 2, "历史请求阻断了显式重试")
     delegate.capture(scrolling: false)
     delegate.capture(scrolling: true)
-    try require(requests == 1 && settingsOpens == 0 && window.isVisible, "未授权时截图快捷键自动重复申请")
+    try require(scheduled.count == 1 && requests == 2 && settingsOpens == 0 && !delegate.hasVisiblePermissionHint, "截图没有直接请求系统，或叠加了应用通知")
+    scheduled.removeFirst()()
+    try require(requests == 3, "截图请求被历史记录拦截")
     authorized = true
     request.performClick(nil)
-    try require(requests == 1 && settingsOpens == 0, "已授权仍触发申请")
+    try require(requests == 3 && settingsOpens == 0, "已授权仍触发申请")
     try require(buttons(window.contentView!).contains { $0.title == "打开系统录屏设置" }, "缺少直接进入系统设置的出口")
     let privacy = buttons(window.contentView!).first { $0.title == "打开系统录屏设置" }!
     privacy.performClick(nil)
-    try require(settingsOpens == 1 && requests == 1, "打开设置按钮错误地申请权限")
+    try require(settingsOpens == 1 && requests == 3, "打开设置按钮错误地申请权限")
     window.close()
     _ = delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
     try require(!window.isVisible && NSApp.modalWindow == nil, "关闭设置后重新启动擅自弹出设置")
     delegate.openSettings()
     try require(window.isVisible, "显式操作不能重新打开设置")
-    print("权限流程：无同步模态、异步单次申请、拒绝/已授权/重复点击、截图快捷键不自动申请、关闭重开通过")
+    // 首次截图直接请求系统；历史记录不能阻止新进程首次明确请求。
+    var rememberedRequest = false, firstRequests = 0
+    let first = AppDelegate()
+    var firstScheduled: [() -> Void] = []
+    let access = ScreenPermissionAccess(isAuthorized: { false }, request: { firstRequests += 1; return false },
+        openSettings: { settingsOpens += 1 }, wasRequested: { rememberedRequest }, recordRequest: { rememberedRequest = true })
+    first.permissionAccess = access
+    first.schedulePermissionRequest = { firstScheduled.append($0) }
+    window.close()
+    first.capture(scrolling: false); first.capture(scrolling: true)
+    try require(firstScheduled.count == 1 && rememberedRequest && firstRequests == 0 && !window.isVisible,
+                "首次截图没有异步单次申请，或弹出了应用设置")
+    firstScheduled.removeFirst()()
+    try require(firstRequests == 1 && !first.hasVisiblePermissionHint, "系统请求尚未确定时叠加了应用权限提示")
+    first.dismissPermissionHint()
+    let restarted = AppDelegate(); restarted.permissionAccess = access
+    var restartedScheduled: [() -> Void] = []
+    restarted.schedulePermissionRequest = { restartedScheduled.append($0) }
+    restarted.capture(scrolling: false)
+    try require(restartedScheduled.count == 1 && !restarted.hasVisiblePermissionHint && firstRequests == 1, "旧记录阻止了新进程明确截图时请求系统")
+    restartedScheduled.removeFirst()()
+    try require(firstRequests == 2, "新进程没有调用系统接口")
+    restarted.dismissPermissionHint(); delegate.dismissPermissionHint()
+    print("权限流程：首次截图原生请求、显式重试、旧记录不阻断、快捷键防重复及系统设置直达通过")
 }

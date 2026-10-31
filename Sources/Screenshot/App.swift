@@ -46,6 +46,8 @@ struct ScreenPermissionAccess {
     var openSettings: () -> Void = {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") { NSWorkspace.shared.open(url) }
     }
+    var wasRequested: () -> Bool = { UserDefaults.standard.bool(forKey: "permission.screen.requested") }
+    var recordRequest: () -> Void = { UserDefaults.standard.set(true, forKey: "permission.screen.requested") }
 }
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -81,7 +83,8 @@ struct ScreenPermissionAccess {
     var diagnosticEditor: EditorController? { editor }
     var schedulePermissionRequest: (@escaping () -> Void) -> Void = { action in DispatchQueue.main.async(execute: action) }
     private var permissionRequestPending = false
-    private var hasRequestedPermission = false
+    private var requestedPermissionThisProcess = false
+    private var hasRequestedPermission: Bool { requestedPermissionThisProcess || permissionAccess.wasRequested() }
     private weak var permissionButton: NSButton?
     private var permissionStatusLabel: NSTextField?
     private var hotkeyStatusLabel: NSTextField?
@@ -186,10 +189,11 @@ struct ScreenPermissionAccess {
         let panel = permissionHint ?? PassivePanel(contentRect: CGRect(x: 0, y: 0, width: 288, height: 112), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .floating; panel.isReleasedWhenClosed = false; panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        let label = NSTextField(wrappingLabelWithString: "截图需要屏幕录制权限。请在设置中申请或检查当前应用的权限。")
-        let settings = NSButton(title: "打开设置…", target: self, action: #selector(openSettings))
+        let label = NSTextField(wrappingLabelWithString: "尚未取得录屏权限。可直接申请，或打开系统录屏设置。")
+        let request = NSButton(title: "申请权限", target: self, action: #selector(permissionGuide))
+        let settings = NSButton(title: "系统录屏设置", target: self, action: #selector(openPrivacy))
         let close = NSButton(title: "关闭", target: self, action: #selector(dismissPermissionHint))
-        let actions = NSStackView(views: [settings, close]); actions.spacing = 10
+        let actions = NSStackView(views: [request, settings, close]); actions.spacing = 10
         let stack = NSStackView(views: [label, actions]); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
         label.widthAnchor.constraint(equalToConstant: 260).isActive = true
@@ -259,7 +263,12 @@ struct ScreenPermissionAccess {
     @objc private func scrollCapture() { capture(scrolling: true) }
     func capture(scrolling: Bool) {
         guard !busy && !installingUpdate else { return }
-        guard permissionAccess.isAuthorized() else { showPermissionHint(); return }
+        guard permissionAccess.isAuthorized() else {
+            // 明确按下截图键就直接请求系统，不在桌面叠加自建权限提示。
+            // 仅合并尚在调度的请求；不启动计时重试或自动打开任何设置。
+            requestScreenPermission()
+            return
+        }
         busy = true
         let frontmost = NSWorkspace.shared.frontmostApplication
         previousApp = frontmost?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? lastExternalApp : frontmost
@@ -348,12 +357,14 @@ struct ScreenPermissionAccess {
     @objc private func showEditor() { guard !installingUpdate else { return }; busy = true; NSApp.activate(ignoringOtherApps: true); editor?.showWindow(nil) }
     @objc private func quit() { session?.cancelCapture(); NSApp.terminate(nil) }
     @objc private func permissionGuide() {
-        openSettings()
+        dismissPermissionHint()
+        requestScreenPermission()
+    }
+    private func requestScreenPermission() {
         guard !permissionRequestPending else { return }
         guard !permissionAccess.isAuthorized() else { refreshSettingsStatus(); return }
-        // 两个按钮职责分开：重复点击主按钮仅重新检查，系统设置只由独立按钮打开。
-        guard !hasRequestedPermission else { refreshSettingsStatus(); return }
-        hasRequestedPermission = true; permissionRequestPending = true
+        // 明确点击可重新调用系统接口；只合并尚在执行的请求，不用历史记录封锁重试。
+        requestedPermissionThisProcess = true; permissionAccess.recordRequest(); permissionRequestPending = true
         refreshSettingsStatus()
         // 先退出按钮/辅助功能的 action 调用栈，再交给系统显示原生授权。
         schedulePermissionRequest { [weak self] in
@@ -363,6 +374,11 @@ struct ScreenPermissionAccess {
             self.refreshSettingsStatus()
             if granted && !self.permissionAccess.isAuthorized() {
                 self.permissionStatusLabel?.stringValue = "系统已接受授权，请退出并重新打开当前路径的应用。"
+            }
+            // 返回 false 只说明当前未获授权，系统提示此时可能仍在屏幕上。
+            // 不把它当作用户已经拒绝，也不立即叠加本应用的提示。
+            if !granted && !self.permissionAccess.isAuthorized() {
+                self.permissionStatusLabel?.stringValue = "已向系统发送授权请求，请处理 macOS 的提示；是否可直接允许由系统决定。"
             }
         }
     }
@@ -386,7 +402,7 @@ struct ScreenPermissionAccess {
         window.title = "\(ApplicationFlavor.name) · 设置"; window.isReleasedWhenClosed = false; window.center()
         let title = NSTextField(labelWithString: "随时截图，内容留在本机。")
         title.font = .systemFont(ofSize: 22, weight: .semibold)
-        let help = NSTextField(wrappingLabelWithString: "点击快捷键框，再按新的组合键。长截图时请框选可滚动正文，避开固定顶部栏、输入框和悬浮按钮；可连续向下滚动，无需逐次停顿；快速跳跃或内容重排可能无法接续。")
+        let help = NSTextField(wrappingLabelWithString: "点击快捷键框，再按新的组合键。长截图时请框选可滚动正文，避开固定顶部栏、输入框和悬浮按钮；可连续向上或向下滚动，回看已捕获内容不会重复追加；快速跳跃或内容重排可能无法接续。")
         let captureButtons = NSStackView(views: [NSButton(title: "区域截图", target: self, action: #selector(normalCapture)), NSButton(title: "滚动长截图", target: self, action: #selector(scrollCapture))])
         captureButtons.spacing = 12
         var views: [NSView] = [title, help, captureButtons]
@@ -433,13 +449,13 @@ struct ScreenPermissionAccess {
     private func refreshSettingsStatus() {
         let authorized = permissionAccess.isAuthorized()
         permissionButton?.isEnabled = !permissionRequestPending && !authorized
-        permissionButton?.title = permissionRequestPending ? "正在申请…" : (authorized ? "录屏权限已开启" : (hasRequestedPermission ? "重新检查权限" : "申请录屏权限"))
+        permissionButton?.title = permissionRequestPending ? "正在申请…" : (authorized ? "录屏权限已开启" : (hasRequestedPermission ? "重新申请录屏权限" : "申请录屏权限"))
         if permissionRequestPending {
             permissionStatusLabel?.stringValue = "正在等待系统授权。只会发起一次请求，请处理 macOS 的提示。"
         } else if authorized {
             permissionStatusLabel?.stringValue = "屏幕录制权限已开启。可点击上方按钮验证截图。"
         } else if hasRequestedPermission {
-            permissionStatusLabel?.stringValue = "系统尚未授予当前应用录屏权限。可点击右侧‘打开系统录屏设置’处理；此按钮只重新检查，不会打开系统设置。授权后退出并重新打开。"
+            permissionStatusLabel?.stringValue = "系统尚未授予当前应用录屏权限。可点击右侧‘打开系统录屏设置’处理；也可点击重新申请，让系统决定是否展示授权窗口。授权后按系统提示重新打开。"
         } else {
             permissionStatusLabel?.stringValue = "点击‘申请录屏权限’向系统发起一次授权请求；‘打开系统录屏设置’仅打开设置页面。若开关已开启仍不可用，请核对下方安装路径。"
         }
