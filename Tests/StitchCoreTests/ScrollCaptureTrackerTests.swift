@@ -75,7 +75,14 @@ final class ScrollCaptureTrackerTests: XCTestCase {
     }
     func testRepeatedPatternDoesNotGuessUpwardSeam() {
         func pattern(_ offset: Int) -> GrayFrame {
-            GrayFrame(width: 64, height: 240, pixels: (0..<(64 * 240)).map { UInt8((($0 / 64 + offset) % 24) * 10) })
+            // 明确中间类型，避免 Swift 6.1 对嵌套泛型/整数运算表达式推导超时。
+            let width = 64, height = 240
+            var pixels = [UInt8](repeating: 0, count: width * height)
+            for y in 0..<height {
+                let value = UInt8(((y + offset) % 24) * 10)
+                for x in 0..<width { pixels[y * width + x] = value }
+            }
+            return GrayFrame(width: width, height: height, pixels: pixels)
         }
         var tracker = ScrollCaptureTracker()
         _ = tracker.consume(pattern(7), at: 0)
