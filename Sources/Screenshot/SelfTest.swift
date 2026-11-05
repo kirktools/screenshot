@@ -10,6 +10,7 @@ import StitchCore
     try await runFrozenSelectionSelfTest()
     try runPermissionFlowSelfTest()
     try runUpdateSelfTest()
+    try runGIFEncodingSelfTest()
     func require(_ condition: Bool, _ message: String) throws { if !condition { throw CaptureError.message(message) } }
     let width = 160, height = 400
     var pixels = [UInt8](repeating: 255, count: width * height * 4)

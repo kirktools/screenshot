@@ -86,6 +86,9 @@ enum CaptureError: LocalizedError {
         })
     }
     func makeStream(_ region: CGRect) async throws -> any RegionFrameStream {
+        try await makeStream(region, frameRate: 30, maximumDimension: nil)
+    }
+    func makeStream(_ region: CGRect, frameRate: Int32, maximumDimension: Int?) async throws -> any RegionFrameStream {
         // 选框和状态面板已经显示后再取应用列表。prepare 时本应用可能还没有可见窗口，
         // 复用旧列表会漏掉自身，从而把新出现的边框/面板截进首帧。
         let latest = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
@@ -103,7 +106,11 @@ enum CaptureError: LocalizedError {
         guard config.width > 0, config.height > 0, config.width * config.height <= 32_000_000 else {
             throw CaptureError.message("长截图区域过大，请缩小区域")
         }
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        if let maximumDimension {
+            let ratio = min(1, Double(maximumDimension) / Double(max(config.width, config.height)))
+            config.width = max(1, Int(Double(config.width) * ratio)); config.height = max(1, Int(Double(config.height) * ratio))
+        }
+        config.minimumFrameInterval = CMTime(value: 1, timescale: frameRate)
         config.queueDepth = 3; config.pixelFormat = kCVPixelFormatType_32BGRA
         config.showsCursor = false; config.scalesToFit = true; config.capturesAudio = false
         config.colorSpaceName = CGColorSpace.sRGB

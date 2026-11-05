@@ -62,6 +62,8 @@ struct ScreenPermissionAccess {
     private var permissionHintTimer: Timer?
     private var updateController: AppUpdateController?
     private var busy = false
+    private var gifRecorder: GIFRecorder?
+    private var gifPreview: GIFPreview?
     private var installingUpdate = false
     private var normal = Shortcut.normal
     private var scroll = Shortcut.scroll
@@ -237,6 +239,7 @@ struct ScreenPermissionAccess {
         menu.addItem(.separator())
         add(menu, "\(localized("capture.normal"))   \(normal.label)", #selector(normalCapture))
         add(menu, "\(localized("capture.scroll"))   \(scroll.label)", #selector(scrollCapture))
+        add(menu, "录制 GIF…", #selector(recordGIF))
         if editor != nil { add(menu, "打开上次预览", #selector(showEditor)) }
         menu.addItem(.separator()); if !ApplicationFlavor.isDevelopment { add(menu, "检查更新…", #selector(checkForUpdates)) }; add(menu, localized("settings"), #selector(openSettings))
         add(menu, localized("quit"), #selector(quit)); item.menu = menu
@@ -258,6 +261,35 @@ struct ScreenPermissionAccess {
         edit.addItem(withTitle: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         edit.addItem(withTitle: "保存 PNG", action: #selector(EditorCanvas.saveDocument(_:)), keyEquivalent: "s")
         NSApp.mainMenu = menu
+    }
+    @objc private func recordGIF() {
+        guard !busy, !installingUpdate else { return }
+        guard permissionAccess.isAuthorized() else { requestScreenPermission(); return }
+        busy = true; settings?.orderOut(nil); editor?.window?.orderOut(nil)
+        let selector = RegionSelector(); self.selector = selector
+        selector.completion = { [weak self] region in
+            guard let self else { return }; self.selector = nil
+            guard let region else { self.busy = false; return }
+            Task { @MainActor in
+                do {
+                    guard region.width >= 32, region.height >= 32, NSScreen.screens.contains(where: { $0.frame.contains(region) }) else { throw CaptureError.message("GIF 录制区域需在同一显示器内，且至少 32 × 32 点") }
+                    let provider = MacCaptureProvider(); try await provider.prepare()
+                    let recorder = GIFRecorder(provider: provider, region: region, hotkeys: self.hotkeys)
+                    self.gifRecorder = recorder
+                    recorder.completion = { [weak self] data in
+                        guard let self else { return }; self.gifRecorder = nil; self.busy = false
+                        if let data {
+                            self.gifPreview?.close()
+                            let preview = GIFPreview(data: data); self.gifPreview = preview
+                            preview.closed = { [weak self] in self?.gifPreview = nil }
+                            NSApp.activate(ignoringOtherApps: true); preview.showWindow(nil)
+                        }
+                    }
+                    try recorder.show()
+                } catch { self.gifRecorder = nil; self.busy = false; showError(error) }
+            }
+        }
+        selector.begin()
     }
     @objc private func normalCapture() { capture(scrolling: false) }
     @objc private func scrollCapture() { capture(scrolling: true) }
