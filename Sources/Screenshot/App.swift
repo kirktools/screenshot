@@ -410,7 +410,7 @@ struct ScreenPermissionAccess {
     @objc func openSettings() {
         dismissPermissionHint()
         if let settings { refreshSettingsStatus(); NSApp.activate(ignoringOtherApps: true); settings.makeKeyAndOrderFront(nil); return }
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 610, height: 610), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 610, height: 770), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "\(ApplicationFlavor.name) · 设置"; window.isReleasedWhenClosed = false; window.center()
         let title = NSTextField(labelWithString: "随时截图，内容留在本机。")
         title.font = .systemFont(ofSize: 22, weight: .semibold)
@@ -445,6 +445,14 @@ struct ScreenPermissionAccess {
         status.textColor = .secondaryLabelColor; views.append(status)
         let hotkeyStatus = NSTextField(wrappingLabelWithString: "")
         hotkeyStatusLabel = hotkeyStatus; views.append(hotkeyStatus)
+        let diagnostics = NSButton(checkboxWithTitle: "记录本机截图耗时", target: self, action: #selector(toggleCaptureTiming(_:)))
+        diagnostics.state = CaptureTiming.enabled ? .on : .off
+        views.append(diagnostics)
+        let diagnosticHelp = NSTextField(wrappingLabelWithString: "仅记录截图阶段、结果和耗时，不记录图片、窗口标题或输入内容，不上传。更改从下一次截图生效；关闭后保留已有记录。最多保留约 2 MB。")
+        diagnosticHelp.textColor = .secondaryLabelColor
+        views.append(diagnosticHelp)
+        let diagnosticActions = NSStackView(views: [NSButton(title: "打开日志目录", target: self, action: #selector(openTimingLogs)), NSButton(title: "清除耗时记录", target: self, action: #selector(clearTimingLogs))])
+        diagnosticActions.spacing = 12; views.append(diagnosticActions)
         let version = NSTextField(labelWithString: "版本 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版") · macOS 14+ · MIT © kirktools")
         version.textColor = .secondaryLabelColor
         let updates = NSButton(title: ApplicationFlavor.isDevelopment ? "开发版：用 make dev 更新" : "检查更新…", target: self, action: #selector(checkForUpdates))
@@ -455,8 +463,24 @@ struct ScreenPermissionAccess {
         location.font = .systemFont(ofSize: 11); location.textColor = .secondaryLabelColor; views.append(location)
         let stack = NSStackView(views: views); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 18
         stack.translatesAutoresizingMaskIntoConstraints = false; window.contentView!.addSubview(stack)
-        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 24), help.widthAnchor.constraint(equalTo: stack.widthAnchor), status.widthAnchor.constraint(equalTo: stack.widthAnchor), hotkeyStatus.widthAnchor.constraint(equalTo: stack.widthAnchor)])
+        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 24), help.widthAnchor.constraint(equalTo: stack.widthAnchor), diagnosticHelp.widthAnchor.constraint(equalTo: stack.widthAnchor), status.widthAnchor.constraint(equalTo: stack.widthAnchor), hotkeyStatus.widthAnchor.constraint(equalTo: stack.widthAnchor)])
         settings = window; refreshSettingsStatus(); NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
+    }
+    @objc private func toggleCaptureTiming(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: "diagnostics.captureTiming")
+    }
+    @objc private func openTimingLogs() {
+        do {
+            try FileManager.default.createDirectory(at: CaptureTiming.directory, withIntermediateDirectories: true)
+            NSWorkspace.shared.open(CaptureTiming.directory)
+        } catch { showError(error) }
+    }
+    @objc private func clearTimingLogs() {
+        CaptureTiming.clear { success in
+            Task { @MainActor in
+                if !success { showError(CaptureError.message("无法清除耗时记录，请检查日志目录的写入权限。")) }
+            }
+        }
     }
     private func refreshSettingsStatus() {
         let authorized = permissionAccess.isAuthorized()
