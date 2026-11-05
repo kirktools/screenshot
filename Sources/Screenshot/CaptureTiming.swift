@@ -5,7 +5,22 @@ final class CaptureTiming: @unchecked Sendable {
     @TaskLocal static var current: CaptureTiming?
     private static let runID = UUID().uuidString
     static var enabled: Bool {
-        ApplicationFlavor.isDevelopment || UserDefaults.standard.bool(forKey: "diagnostics.captureTiming") || ProcessInfo.processInfo.environment["SCREENSHOT_CAPTURE_TIMING"] == "1"
+        (UserDefaults.standard.object(forKey: "diagnostics.captureTiming") as? Bool) ?? (ApplicationFlavor.isDevelopment || ProcessInfo.processInfo.environment["SCREENSHOT_CAPTURE_TIMING"] == "1")
+    }
+    static var directory: URL {
+        FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Logs").appendingPathComponent(ApplicationFlavor.name)
+    }
+    static func clear(completion: @escaping @Sendable (Bool) -> Void) {
+        writer.async {
+            do {
+                for name in ["capture-timing.jsonl", "capture-timing.previous.jsonl"] {
+                    let url = directory.appendingPathComponent(name)
+                    if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+                }
+                completion(true)
+            } catch { completion(false) }
+        }
     }
     private static let writer = DispatchQueue(label: "screenshot.capture-timing", qos: .utility)
     private let lock = NSLock()
@@ -40,8 +55,7 @@ final class CaptureTiming: @unchecked Sendable {
         // 写盘排在截图关键路径之后；单文件约 1 MB，最多保留一份轮转备份。
         Self.writer.async {
             do {
-                let directory = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-                    .appendingPathComponent("Logs").appendingPathComponent(ApplicationFlavor.name)
+                let directory = Self.directory
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 let url = directory.appendingPathComponent("capture-timing.jsonl")
                 if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size >= 1_048_576 {
