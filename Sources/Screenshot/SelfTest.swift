@@ -5,6 +5,7 @@ import StitchCore
 /// 不读取桌面、不申请权限：验证平台渲染、拼接方向和实际导出像素。
 @MainActor func runSelfTest() async throws {
     guard localized("capture.normal") != "capture.normal" else { throw CaptureError.message("运行位置的语言资源未加载") }
+    try runTextObjectSelfTest()
     try runSelectionSelfTest()
     try await runFrozenSelectionSelfTest()
     try runPermissionFlowSelfTest()
@@ -335,4 +336,23 @@ import StitchCore
     try require(firstRequests == 2, "新进程没有调用系统接口")
     restarted.dismissPermissionHint(); delegate.dismissPermissionHint()
     print("权限流程：首次截图原生请求、显式重试、旧记录不阻断、快捷键防重复及系统设置直达通过")
+}
+
+@MainActor private func runTextObjectSelfTest() throws {
+    func require(_ value: Bool) throws { if !value { throw CaptureError.message("文字对象编辑回归失败") } }
+    let ctx = CGContext(data: nil, width: 300, height: 200, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.setFillColor(NSColor.white.cgColor); ctx.fill(CGRect(x: 0, y: 0, width: 300, height: 200))
+    let canvas = EditorCanvas(image: ctx.makeImage()!)
+    canvas.apply(Annotation(tool: .text, start: CGPoint(x: 40, y: 50), end: .zero, text: "Watermark"))
+    canvas.selectText(at: CGPoint(x: 45, y: 55))
+    try require(canvas.selectedText == 0)
+    let before = try render(canvas.state)!.png()
+    canvas.styleSelectedText(fontSize: 44, rotation: 35, opacity: 0.4)
+    try require(canvas.state.annotations[0].fontSize == 44 && canvas.state.annotations[0].rotation == 35)
+    try require(try render(canvas.state)!.png() != before)
+    canvas.undo(nil); try require(canvas.state.annotations[0].rotation == 0)
+    canvas.redo(nil); try require(canvas.state.annotations[0].rotation == 35)
+    let a = canvas.state.annotations[0]
+    try require(a.containsText(a.start))
+    try require(!a.containsText(CGPoint(x: 290, y: 190)))
 }
