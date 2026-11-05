@@ -43,11 +43,20 @@ final class CaptureScrollView: NSScrollView {
 }
 struct Annotation {
     let tool: EditTool
-    let start: CGPoint
-    let end: CGPoint
+    var start: CGPoint
+    var end: CGPoint
     var text: String = ""
     var color: AnnotationColor = .red
     var lineWidth: CGFloat = 0
+    var fontSize: CGFloat = 28
+    var rotation: CGFloat = 0
+    var opacity: CGFloat = 1
+    var textSize: CGSize { (text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: fontSize, weight: .semibold)]) }
+    func containsText(_ point: CGPoint) -> Bool {
+        let angle = -rotation * .pi / 180
+        let dx = point.x - start.x, dy = point.y - start.y
+        return CGRect(origin: .zero, size: textSize).insetBy(dx: -6, dy: -6).contains(CGPoint(x: dx*cos(angle)-dy*sin(angle), y: dx*sin(angle)+dy*cos(angle)))
+    }
     var rect: CGRect { CGRect(x: min(start.x, end.x), y: min(start.y, end.y), width: abs(end.x - start.x), height: abs(end.y - start.y)) }
 }
 struct EditState {
@@ -78,7 +87,10 @@ struct EditState {
             path.move(to: a.end)
             path.line(to: CGPoint(x: a.end.x - length * cos(angle + 0.5), y: a.end.y - length * sin(angle + 0.5))); path.stroke()
         case .text:
-            (a.text as NSString).draw(at: a.start, withAttributes: [.font: NSFont.systemFont(ofSize: max(22, line * 7), weight: .semibold), .foregroundColor: a.color.value])
+            NSGraphicsContext.saveGraphicsState()
+            let transform = NSAffineTransform(); transform.translateX(by: a.start.x, yBy: a.start.y); transform.rotate(byDegrees: a.rotation); transform.concat()
+            (a.text as NSString).draw(at: .zero, withAttributes: [.font: NSFont.systemFont(ofSize: a.fontSize, weight: .semibold), .foregroundColor: a.color.value.withAlphaComponent(a.opacity)])
+            NSGraphicsContext.restoreGraphicsState()
         case .crop:
             NSColor.systemTeal.setStroke(); path.appendRect(a.rect); path.stroke()
         }
@@ -101,6 +113,12 @@ struct EditState {
     var tool: EditTool = .arrow
     var selectedColor: AnnotationColor = .red
     var strokeWidth: CGFloat = 3
+    var textFontSize: CGFloat = 28
+    var textRotation: CGFloat = 0
+    var textOpacity: CGFloat = 1
+    private(set) var selectedText: Int?
+    private var editingText: Int?
+    private var movingText: (point: CGPoint, original: Annotation)?
     var zoom: CGFloat = 1
     var preferredWidth: CGFloat = 960
     var maximumZoom: CGFloat = 1
@@ -128,7 +146,17 @@ struct EditState {
     override func draw(_ dirtyRect: NSRect) {
         NSGraphicsContext.saveGraphicsState()
         NSAffineTransform.transformScale(zoom).concat()
-        paint(state, transient: drag)
+        var visible = state
+        if let editingText, visible.annotations.indices.contains(editingText) { visible.annotations.remove(at: editingText) }
+        paint(visible, transient: drag)
+        if let selectedText, state.annotations.indices.contains(selectedText), editingText == nil {
+            let a = state.annotations[selectedText]
+            NSGraphicsContext.saveGraphicsState()
+            let transform = NSAffineTransform(); transform.translateX(by: a.start.x, yBy: a.start.y); transform.rotate(byDegrees: a.rotation); transform.concat()
+            NSColor.systemTeal.setStroke()
+            let border = NSBezierPath(rect: CGRect(origin: .zero, size: a.textSize).insetBy(dx: -4, dy: -4)); border.lineWidth = 1 / zoom; border.stroke()
+            NSGraphicsContext.restoreGraphicsState()
+        }
         NSGraphicsContext.restoreGraphicsState()
     }
     override func keyDown(with event: NSEvent) {
@@ -145,10 +173,20 @@ struct EditState {
         let p = point(event)
         commitText()
         if tool == .text {
+            selectText(at: p)
+            if let index = selectedText, event.clickCount < 2 {
+                movingText = (p, state.annotations[index]); update(); return
+            }
+            editingText = selectedText
             textOrigin = p; textColor = selectedColor; textLineWidth = strokeWidth / zoom
             let field = NSTextField(frame: CGRect(x: p.x * zoom, y: p.y * zoom, width: max(80, min(320, bounds.width - p.x * zoom)), height: max(26, 35 * zoom)))
+            if let editingText {
+                let a = state.annotations[editingText]; textOrigin = a.start; textColor = a.color
+                textFontSize = a.fontSize; textRotation = a.rotation; textOpacity = a.opacity
+                field.frame.origin = CGPoint(x: a.start.x * zoom, y: a.start.y * zoom); field.stringValue = a.text
+            }
             field.placeholderString = "输入文字，回车确认"
-            field.font = .systemFont(ofSize: max(14, max(22, textLineWidth * 7) * zoom), weight: .semibold)
+            field.font = .systemFont(ofSize: max(10, textFontSize * zoom), weight: .semibold)
             field.textColor = textColor.value; field.delegate = self
             field.target = self; field.action = #selector(finishText)
             textField = field; addSubview(field); window?.makeFirstResponder(field)
@@ -159,18 +197,35 @@ struct EditState {
         guard let field = textField else { return }
         let value = field.currentEditor()?.string ?? field.stringValue
         textField = nil; field.removeFromSuperview()
-        if !value.isEmpty { apply(Annotation(tool: .text, start: textOrigin, end: textOrigin, text: value, color: textColor, lineWidth: textLineWidth)) }
+        if !value.isEmpty {
+            let a = Annotation(tool: .text, start: textOrigin, end: textOrigin, text: value, color: textColor, lineWidth: textLineWidth, fontSize: textFontSize, rotation: textRotation, opacity: textOpacity)
+            if let index = editingText, state.annotations.indices.contains(index) { checkpoint(); state.annotations[index] = a }
+            else { apply(a); selectedText = state.annotations.indices.last }
+        }
+        editingText = nil; update()
     }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
-            textField?.removeFromSuperview(); textField = nil; window?.makeFirstResponder(self); return true
+            textField?.removeFromSuperview(); textField = nil; editingText = nil; update(); window?.makeFirstResponder(self); return true
         }
         return false
     }
     override func mouseDragged(with event: NSEvent) {
+        if let movingText, let selectedText {
+            let p = point(event), delta = CGPoint(x: p.x-movingText.point.x, y: p.y-movingText.point.y)
+            var a = movingText.original; a.start.x += delta.x; a.start.y += delta.y; a.end.x += delta.x; a.end.y += delta.y
+            state.annotations[selectedText] = a; update(); return
+        }
         guard let a = drag else { return }; drag = Annotation(tool: a.tool, start: a.start, end: point(event), color: a.color, lineWidth: a.lineWidth); needsDisplay = true
     }
     override func mouseUp(with event: NSEvent) {
+        if let movingText, let selectedText {
+            let result = state.annotations[selectedText]
+            state.annotations[selectedText] = movingText.original
+            self.movingText = nil
+            if result.start != movingText.original.start { checkpoint(); state.annotations[selectedText] = result }
+            update(); return
+        }
         guard let a = drag else { return }; drag = nil
         let final = Annotation(tool: a.tool, start: a.start, end: point(event), color: a.color, lineWidth: a.lineWidth)
         apply(final)
@@ -186,6 +241,22 @@ struct EditState {
         }
         update()
     }
+    func selectText(at point: CGPoint) {
+        selectedText = state.annotations.indices.reversed().first { state.annotations[$0].tool == .text && state.annotations[$0].containsText(point) }
+        if let selectedText {
+            let a = state.annotations[selectedText]; textFontSize = a.fontSize; textRotation = a.rotation; textOpacity = a.opacity; selectedColor = a.color
+        }
+        update()
+    }
+    func styleSelectedText(fontSize: CGFloat, rotation: CGFloat, opacity: CGFloat) {
+        commitText(); textFontSize = fontSize; textRotation = rotation; textOpacity = opacity
+        if let selectedText, state.annotations.indices.contains(selectedText) {
+            checkpoint(); state.annotations[selectedText].fontSize = fontSize
+            state.annotations[selectedText].rotation = rotation; state.annotations[selectedText].opacity = opacity
+            state.annotations[selectedText].color = selectedColor
+        }
+        update()
+    }
     func reframe(image: CGImage, region: CGRect, scale: CGFloat, remember: Bool) {
         guard let previous = state.captureRegion else { return }
         if remember { checkpoint() }
@@ -193,7 +264,7 @@ struct EditState {
         state.annotations = state.annotations.map { annotation in
             return Annotation(tool: annotation.tool, start: CGPoint(x: annotation.start.x + delta.x, y: annotation.start.y + delta.y),
                                  end: CGPoint(x: annotation.end.x + delta.x, y: annotation.end.y + delta.y), text: annotation.text,
-                                 color: annotation.color, lineWidth: annotation.lineWidth)
+                                 color: annotation.color, lineWidth: annotation.lineWidth, fontSize: annotation.fontSize, rotation: annotation.rotation, opacity: annotation.opacity)
         }
         state.image = image; state.captureRegion = region; update()
     }
@@ -207,8 +278,8 @@ struct EditState {
         future.removeAll()
     }
     private func update() { needsDisplay = true; changed?() }
-    @objc func undo(_ sender: Any?) { guard let previous = history.popLast() else { return }; future.append(state); state = previous; layoutImage(); update() }
-    @objc func redo(_ sender: Any?) { guard let next = future.popLast() else { return }; history.append(state); state = next; layoutImage(); update() }
+    @objc func undo(_ sender: Any?) { guard let previous = history.popLast() else { return }; future.append(state); state = previous; selectedText = nil; layoutImage(); update() }
+    @objc func redo(_ sender: Any?) { guard let next = future.popLast() else { return }; history.append(state); state = next; selectedText = nil; layoutImage(); update() }
     @objc func copy(_ sender: Any?) { _ = copyImage() }
     @discardableResult func copyImage() -> Bool {
         commitText()
@@ -254,6 +325,9 @@ extension NSAffineTransform {
     private let visibleFrame: CGRect
     private let scrollView = CaptureScrollView()
     private let isLongImage: Bool
+    private let fontSizeField = NSTextField(string: "28")
+    private let rotationField = NSTextField(string: "0")
+    private let opacityField = NSTextField(string: "100")
     private var colorButtons: [NSButton] = []
     var diagnosticGeometry: (image: CGRect, toolbar: CGRect, toolbarVisible: Bool, backdrops: Int, scrolling: Bool, elasticity: NSScrollView.Elasticity) {
         (window?.frame ?? .zero, toolbar.frame, toolbar.isVisible, backdrops.filter(\.isVisible).count, scrollView.permitsScrolling, scrollView.verticalScrollElasticity)
@@ -344,9 +418,23 @@ extension NSAffineTransform {
         let widths = NSSegmentedControl(labels: ["细", "中", "粗"], trackingMode: .selectOne, target: self, action: #selector(selectWidth(_:)))
         widths.selectedSegment = 1; styles.append(widths)
         let styleRow = NSStackView(views: styles); styleRow.spacing = 6
-        let rows = NSStackView(views: [mainRow, styleRow]); rows.orientation = .vertical; rows.alignment = .leading; rows.spacing = 8
+        var textStyles: [NSView] = []
+        for (label, field) in [("字号", fontSizeField), ("旋转°", rotationField), ("不透明度%", opacityField)] {
+            field.widthAnchor.constraint(equalToConstant: 52).isActive = true
+            field.target = self; field.action = #selector(changeTextStyle)
+            textStyles += [NSTextField(labelWithString: label), field]
+        }
+        let textHelp = NSTextField(labelWithString: "文字工具：单击选中拖动，双击改文字")
+        textHelp.font = .systemFont(ofSize: 11); textStyles.append(textHelp)
+        let textRow = NSStackView(views: textStyles); textRow.spacing = 6
+        let rows = NSStackView(views: [mainRow, styleRow, textRow]); rows.orientation = .vertical; rows.alignment = .leading; rows.spacing = 8
         toolbar.contentView = captureToolbar(views: [rows])
-        canvas.changed = { [weak self] in self?.layoutCapture() }
+        canvas.changed = { [weak self] in
+            guard let self else { return }; self.layoutCapture()
+            self.fontSizeField.doubleValue = self.canvas.textFontSize
+            self.rotationField.doubleValue = self.canvas.textRotation
+            self.opacityField.doubleValue = self.canvas.textOpacity * 100
+        }
         canvas.feedback = { [weak self] message in self?.info.toolTip = message }
         canvas.finishRequested = { [weak self] in self?.completeEditing() }
         canvas.cancelRequested = { [weak self] in self?.cancelEditing() }
@@ -430,8 +518,16 @@ extension NSAffineTransform {
     }
     @objc private func cancelEditing() { close(); dismissed?() }
     @objc private func beginScroll() { close(); requestScroll?() }
+    @objc private func changeTextStyle() {
+        let size = min(300, max(8, fontSizeField.doubleValue))
+        let rotation = min(360, max(-360, rotationField.doubleValue))
+        let opacity = min(100, max(5, opacityField.doubleValue))
+        fontSizeField.doubleValue = size; rotationField.doubleValue = rotation; opacityField.doubleValue = opacity
+        canvas.styleSelectedText(fontSize: size, rotation: rotation, opacity: opacity / 100)
+    }
     @objc private func selectColor(_ sender: NSButton) {
         canvas.commitText(); canvas.selectedColor = AnnotationColor.allCases[sender.tag]
+        if canvas.tool == .text { canvas.styleSelectedText(fontSize: canvas.textFontSize, rotation: canvas.textRotation, opacity: canvas.textOpacity) }
         for button in colorButtons { button.state = button === sender ? .on : .off; button.needsDisplay = true }
         window?.makeFirstResponder(canvas)
     }
