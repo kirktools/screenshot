@@ -94,6 +94,18 @@ struct ScreenPermissionAccess {
     private var hotkeyStatusLabel: NSTextField?
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        #if SCREENSHOT_DOCUMENTATION_DEMO
+        if CommandLine.arguments.contains("--documentation-features-demo") {
+            Task { @MainActor in
+                do {
+                    guard let path = ProcessInfo.processInfo.environment["SCREENSHOT_DOCUMENTATION_DIR"] else { throw CaptureError.message("请指定文档素材目录") }
+                    try await writeFeatureDemonstration(to: URL(fileURLWithPath: path)); NSApp.terminate(nil)
+                } catch { fputs("功能演示导出失败：\(error)\n", stderr); exit(1) }
+            }
+            return
+        }
+        #endif
+        #if SCREENSHOT_DOCUMENTATION_DEMO
         if CommandLine.arguments.contains("--overlay-demo") {
             buildMainMenu()
             let screen = NSScreen.main!.visibleFrame
@@ -111,6 +123,7 @@ struct ScreenPermissionAccess {
             if let number = editor?.diagnosticToolbarViews.first?.window?.windowNumber { print("OVERLAY TOOLBAR WINDOW: \(number)"); fflush(stdout) }
             return
         }
+        #endif
         if CommandLine.arguments.contains("--startup-smoke-test") {
             Task { @MainActor in
                 do { try await runStartupSmokeTest(self); print("STARTUP SMOKE PASSED"); NSApp.terminate(nil) }
@@ -118,6 +131,7 @@ struct ScreenPermissionAccess {
             }
             return
         }
+        #if SCREENSHOT_DOCUMENTATION_DEMO
         if CommandLine.arguments.contains("--documentation-scroll-demo") {
             Task { @MainActor in
                 do {
@@ -127,6 +141,7 @@ struct ScreenPermissionAccess {
             }
             return
         }
+        #endif
         if CommandLine.arguments.contains("--live-scroll-self-test") {
             Task { @MainActor in
                 do { try await runLiveScrollSelfTest(); NSApp.terminate(nil) }
@@ -174,7 +189,9 @@ struct ScreenPermissionAccess {
         }
         normal = load("screenshot.region", fallback: ApplicationFlavor.isDevelopment ? .fallbackNormal : .normal); scroll = load("screenshot.scroll", fallback: ApplicationFlavor.isDevelopment ? .fallbackScroll : .scroll)
         configureMenuBar(); registerTools(); refreshMenu()
+        #if SCREENSHOT_DOCUMENTATION_DEMO
         if CommandLine.arguments.contains("--demo-editor") { present(makeDemoImage()); return }
+        #endif
         // 菜单栏工具启动时保持安静；设置只由明确的菜单或快捷键动作打开。
     }
     func configureMenuBar() {

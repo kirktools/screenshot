@@ -86,3 +86,7 @@ ScrollPreviewCanvas 直接绘制已保存的新增条带，只画与当前视口
 首次明确截图时调用系统原生录屏申请；明确截图直接调用系统请求，不显示自建权限浮层，不自动重试；实际系统弹窗及授权方式由操作系统处理。启动不申请权限，不自动重建授权或更改系统隐私设置。系统接口通过 ScreenPermissionAccess 注入，测试不会申请真实权限。
 
 回归除正常连续帧外，还覆盖双向补图/往返去重/向上撤销的完整 RGBA 对照、超过队列容量的突发帧收尾、合成中取消及独立剪贴板检查。合成测试不代表所有真实应用和系统权限状态已通过人工验收。
+
+## 本地文档演示
+
+文档与视频生成代码位于 `Sources/Screenshot/Development/`，与正常采集流程分开。SwiftPM 默认排除该目录；仅在 `SCREENSHOT_BUILD_DEMO=1` 且 `SCREENSHOT_VARIANT=development` 时加入源码并定义 `SCREENSHOT_DOCUMENTATION_DEMO`。演示命令入口与合成 GIF 适配接口使用同一编译条件，普通包没有这些入口。正式打包拒绝演示开关，并运行 `check-development-boundary.py` 验证二进制及素材边界。`make demo-media` 使用独立构建目录，不安装、不替换日常或普通开发应用。

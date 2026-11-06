@@ -51,3 +51,7 @@ site-check: site
 .PHONY: timing
 timing:
 	@python3 scripts/capture-timing.py
+
+.PHONY: demo-media
+demo-media:
+	@PYTHON="$(or $(PYTHON),python3)" scripts/build-demo-media.sh

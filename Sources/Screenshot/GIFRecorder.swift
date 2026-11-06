@@ -32,8 +32,14 @@ enum GIFEncoding {
     }
 }
 
+#if SCREENSHOT_DOCUMENTATION_DEMO
+typealias GIFCaptureProvider = any RegionCaptureProvider
+#else
+typealias GIFCaptureProvider = MacCaptureProvider
+#endif
+
 @MainActor final class GIFRecorder: NSObject {
-    private let provider: MacCaptureProvider
+    private let provider: GIFCaptureProvider
     private let region: CGRect
     private let hotkeys: HotkeyRegistry
     private let panel: PassivePanel
@@ -49,7 +55,7 @@ enum GIFEncoding {
     private var bytes = 0
     private var started: Double = 0
     var completion: ((Data?) -> Void)?
-    init(provider: MacCaptureProvider, region: CGRect, hotkeys: HotkeyRegistry) {
+    init(provider: GIFCaptureProvider, region: CGRect, hotkeys: HotkeyRegistry) {
         self.provider = provider; self.region = region; self.hotkeys = hotkeys
         boundary = CaptureBoundary(region: region)
         panel = PassivePanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -65,13 +71,33 @@ enum GIFEncoding {
         let screen = NSScreen.screens.first { $0.frame.contains(region) }!
         panel.setFrame(CaptureLayout.toolbar(near: region, size: panel.contentView!.fittingSize, within: screen.visibleFrame), display: false)
     }
-    func show() throws {
+    #if SCREENSHOT_DOCUMENTATION_DEMO
+    private var documentationHotkeys = true
+    private var documentationPanel = true
+    var documentationView: NSView { panel.contentView! }
+    func show(registerHotkeys: Bool, showPanel: Bool) throws {
+        documentationHotkeys = registerHotkeys; documentationPanel = showPanel
+        try show()
+    }
+    #endif
+    private func registerControls() throws {
         guard hotkeys.register("gif.cancel", shortcut: Shortcut(key: 53, modifiers: 0, label: "Esc"), action: { [weak self] in self?.cancelRecording() }) else { throw CaptureError.message("无法注册 GIF 取消快捷键") }
         guard hotkeys.register("gif.finish", shortcut: Shortcut(key: 36, modifiers: 0, label: "↩"), action: { [weak self] in self?.stopRecording() }) else { hotkeys.unregister("gif.cancel"); throw CaptureError.message("无法注册 GIF 完成快捷键") }
+    }
+    func show() throws {
+        #if SCREENSHOT_DOCUMENTATION_DEMO
+        if documentationHotkeys { try registerControls() }
+        #else
+        try registerControls()
+        #endif
         displayObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.cancelRecording() }
         }
+        #if SCREENSHOT_DOCUMENTATION_DEMO
+        if documentationPanel { boundary.show(); panel.orderFrontRegardless() }
+        #else
         boundary.show(); panel.orderFrontRegardless()
+        #endif
     }
     @objc private func startRecording() {
         guard !recording, !finished else { return }; recording = true; started = ProcessInfo.processInfo.systemUptime
@@ -86,7 +112,14 @@ enum GIFEncoding {
         }
         task = Task {
             do {
-                let source = try await provider.makeStream(region, frameRate: 10, maximumDimension: 1280); stream = source
+                #if SCREENSHOT_DOCUMENTATION_DEMO
+                let source: any RegionFrameStream
+                if let mac = provider as? MacCaptureProvider { source = try await mac.makeStream(region, frameRate: 10, maximumDimension: 1280) }
+                else { source = try await provider.makeStream(region) }
+                #else
+                let source = try await provider.makeStream(region, frameRate: 10, maximumDimension: 1280)
+                #endif
+                stream = source
                 guard !finished else { await source.stop(); return }
                 try await source.start()
                 guard !finished else { await source.stop(); return }

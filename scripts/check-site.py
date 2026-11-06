@@ -6,9 +6,9 @@ import os
 from urllib.parse import urlsplit, unquote
 
 root = Path(__file__).resolve().parent.parent / '.build/site'
-expected = {'index.html', 'style.css', 'icon.svg', 'assets/editor.png',
-            'assets/screenshot-intro.gif', 'assets/screenshot-intro.mp4',
-            'assets/screenshot-intro-poster.png', '.nojekyll', 'robots.txt', 'sitemap.xml'}
+expected = {'index.html', 'style.css', 'icon.svg', 'assets/editor-features.png',
+            'assets/features-demo.gif', 'assets/features-demo.mp4',
+            'assets/features-demo-poster.png', '.nojekyll', 'robots.txt', 'sitemap.xml'}
 actual = {p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file()}
 assert actual == expected, f'官网文件范围异常：{actual ^ expected}'
 

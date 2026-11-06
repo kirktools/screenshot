@@ -4,7 +4,7 @@ A lightweight, native macOS capture tool. **One selection for screenshots, scrol
 
 [Website](https://kirktools.github.io/screenshot/) · [Download](https://github.com/kirktools/screenshot/releases/latest) · [简体中文](README.md)
 
-![Native in-place editing and icon toolbar](docs/images/editor.png)
+![Native in-place editing and icon toolbar](docs/images/editor-features.png)
 
 - **Region capture:** hover to select a window, drag a region, adjust its edges, and annotate in place.
 - **Scrolling screenshots:** scroll up or down manually; automatic overlap matching and deduplication. Stable top/bottom bars appear once. Preview, undo, and recovery are available.
@@ -21,9 +21,9 @@ A lightweight, native macOS capture tool. **One selection for screenshots, scrol
 
 Disable the separate scrolling shortcut in Settings to use only one global shortcut, or keep **⌘⇧7** for direct scrolling capture. Shortcuts are configurable.
 
-![16-second basic workflow demo](docs/images/screenshot-intro.gif)
+![24-second demo: text transforms, fixed bars, GIF recording and pinned images](docs/images/features-demo.gif)
 
-[MP4](docs/images/screenshot-intro.mp4) · Native UI and synthetic content, script-driven rather than a recording of mouse interactions.
+[MP4](docs/images/features-demo.mp4) · 24 seconds covering text transforms, fixed-bar scrolling, actual GIF encoding, and pinned images. Native UI and synthetic content; script-driven, with edited pacing rather than mouse interactions.
 
 ## Install
 

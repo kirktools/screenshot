@@ -6,7 +6,7 @@
 
 [官网](https://kirktools.github.io/screenshot/) · [下载正式版](https://github.com/kirktools/screenshot/releases/latest) · [English](README.en.md)
 
-<img src="docs/images/editor.png" alt="Screenshot 原位标注：统一图标工具栏，提供长截图、GIF 录制和贴图入口" width="800">
+<img src="docs/images/editor-features.png" alt="Screenshot 原位标注：统一图标工具栏，提供长截图、GIF 录制和贴图入口" width="800">
 
 ## 能做什么
 
@@ -25,9 +25,9 @@
 
 只想占用一组快捷键？在设置中关闭“长截图独立快捷键”即可；也可保留 **⌘⇧7** 直接唤起长截图。快捷键均可配置。
 
-<img src="docs/images/screenshot-intro.gif" alt="16 秒基础流程演示：原位标注、滚动拼接和长图完成" width="800">
+<img src="docs/images/features-demo.gif" alt="24 秒新功能演示：文字缩放旋转、固定栏长图、GIF 录制和贴图" width="800">
 
-[观看 MP4](docs/images/screenshot-intro.mp4) · <sub>当前原生界面与合成内容，脚本驱动，非鼠标实录。</sub>
+[观看 MP4](docs/images/features-demo.mp4) · <sub>24 秒 · 文字缩放旋转、固定栏长图、GIF 录制与贴图。原生控件和合成内容，脚本驱动，非鼠标实录。</sub>
 
 ## 安装运行
 

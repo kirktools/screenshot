@@ -386,54 +386,6 @@ import UniformTypeIdentifiers
 }
 
 /// 用生成页面驱动真实会话和原生控件，离线更新文档素材，不读取屏幕。
-@MainActor func writeDocumentationScroll(to directory: URL) async throws {
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let document = makeDemoImage(), height = min(600, document.height), end = min(900, document.height - height)
-    let provider = FixtureProvider(), board = NSPasteboard(name: .init("Screenshot-Documentation-" + UUID().uuidString))
-    defer { board.releaseGlobally() }
-    let session = ScrollSession(provider: provider, region: CGRect(x: 0, y: 0, width: document.width, height: height), hotkeys: HotkeyRegistry(), clipboard: board)
-    defer { session.cancelCapture() }
-    var done = false, output: CGImage?, frames: [CGImage] = []
-    session.completion = { image, _ in output = image; done = true }
-    guard session.start(registerHotkeys: false, showPanel: false) else { throw CaptureError.message("文档演示无法启动") }
-    try await Task.sleep(for: .milliseconds(50))
-    func wait(_ condition: () -> Bool) async throws {
-        let deadline = ProcessInfo.processInfo.systemUptime + 4
-        while !condition() {
-            guard ProcessInfo.processInfo.systemUptime < deadline else { throw CaptureError.message("文档演示等待超时") }
-            try await Task.sleep(for: .milliseconds(15))
-        }
-    }
-    for offset in stride(from: 0, through: end, by: 30) {
-        let before = session.diagnosticSnapshot.count
-        provider.source.send(document.cropping(to: CGRect(x: 0, y: offset, width: document.width, height: height))!)
-        try await wait { session.diagnosticSnapshot.count > before }
-        try await Task.sleep(for: .milliseconds(160))
-        if let view = session.diagnosticControls.first, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
-            view.cacheDisplay(in: view.bounds, to: bitmap)
-            if let frame = bitmap.cgImage { frames.append(frame) }
-        }
-    }
-    session.finishCapture(); try await wait { done }
-    guard let output, output.height == height + end, let last = frames.last else { throw CaptureError.message("文档演示输出不完整") }
-    let expected = document.cropping(to: CGRect(x: 0, y: 0, width: document.width, height: height + end))!
-    func rgba(_ image: CGImage) -> Data {
-        let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        return Data(bytes: ctx.data!, count: image.width * image.height * 4)
-    }
-    guard rgba(output) == rgba(expected) else { throw CaptureError.message("文档演示与生成参考不一致，未导出") }
-    try output.png().write(to: directory.appendingPathComponent("scroll-result.png"), options: .atomic)
-    try last.png().write(to: directory.appendingPathComponent("scroll-preview.png"), options: .atomic)
-    guard let gif = CGImageDestinationCreateWithURL(directory.appendingPathComponent("scrolling.gif") as CFURL, UTType.gif.identifier as CFString, frames.count, nil) else { throw CaptureError.message("无法创建文档 GIF") }
-    CGImageDestinationSetProperties(gif, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
-    for (i, frame) in frames.enumerated() {
-        CGImageDestinationAddImage(gif, frame, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: i == frames.count - 1 ? 1.5 : 0.15]] as CFDictionary)
-    }
-    guard CGImageDestinationFinalize(gif) else { throw CaptureError.message("文档 GIF 写入失败") }
-    print("离线文档素材通过：原生控件、合成滚动帧及逐像素结果验证；未读取桌面。")
-}
-
 /// 固定顶栏与局部悬浮底栏经过真实会话、撤销、PNG 输出；逐像素验证不重复、不漏正文。
 @MainActor private func runFixedRegionScrollSelfTest() async throws {
     func require(_ ok: Bool, _ message: String) throws { if !ok { throw CaptureError.message(message) } }

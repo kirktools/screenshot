@@ -21,7 +21,12 @@ case "$variant" in
   development) app_name='Screenshot Dev'; bundle_id=com.kirktools.screenshot.dev; export SCREENSHOT_SKIP_PACKAGING=1 ;;
   *) echo 'SCREENSHOT_VARIANT 只能是 release 或 development' >&2; exit 1 ;;
 esac
-app="$PWD/dist/$app_name.app"
+if [[ "${SCREENSHOT_BUILD_DEMO:-0}" == 1 && "$variant" != development ]]; then
+  echo '演示构建仅允许 SCREENSHOT_VARIANT=development，正式构建已拒绝。' >&2; exit 1
+fi
+export SCREENSHOT_VARIANT="$variant"
+if [[ -n "${SCREENSHOT_BUILD_SCRATCH:-}" ]]; then build_flags+=(--scratch-path "$SCREENSHOT_BUILD_SCRATCH"); fi
+app="${SCREENSHOT_APP_OUTPUT_DIR:-$PWD/dist}/$app_name.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 if [[ "${UNIVERSAL:-0}" == 1 ]]; then
   package_inputs=$(mktemp -d "$PWD/.build/package-inputs.XXXXXX")
@@ -88,6 +93,11 @@ PYTHON
 # CI 测试可使用 ad-hoc；make dev 与正式 Release 必须使用稳定证书身份。
 python3 scripts/sign-app.py "$app" --mode "${SCREENSHOT_SIGNING_MODE:-adhoc}"
 "$app/Contents/MacOS/Screenshot" --packaged-resources-test
+if [[ "${SCREENSHOT_BUILD_DEMO:-0}" == 1 ]]; then
+  python3 scripts/check-development-boundary.py "$app" --demo
+else
+  python3 scripts/check-development-boundary.py "$app"
+fi
 if [[ "${SCREENSHOT_SKIP_PACKAGING:-0}" != 1 ]]; then
   ditto -c -k --sequesterRsrc --keepParent "$app" "$PWD/dist/Screenshot-$version-macOS.zip"
   scripts/package-dmg.sh
