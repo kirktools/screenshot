@@ -423,6 +423,7 @@ final class EditorToolbarPanel: NSPanel {
         return toolbar.contentView.map(descendants) ?? []
     }
     var requestScroll: (() -> Void)?
+    var requestGIF: ((CGRect) -> Void)?
     var dismissed: (() -> Void)?
     init(image: CGImage, region: CGRect? = nil, allowScroll: Bool = false, frozenCapture: FrozenCapture? = nil) {
         canvas = EditorCanvas(image: image)
@@ -519,6 +520,7 @@ final class EditorToolbarPanel: NSPanel {
             let button = icon("arrow.up.and.down", "滚动长截图（重新采集选区）", target: self, action: #selector(beginScroll))
             button.image = CaptureIcons.toolbar("arrow.up.and.down")
             controls.append(button)
+            controls.append(icon("video", "录制 GIF（使用当前选区，不包含标注）", target: self, action: #selector(beginGIF)))
         }
         let pin = icon("pin", "钉到屏幕", target: self, action: #selector(pinEditing))
         let more = icon("ellipsis", "更多：裁剪", target: self, action: #selector(showMore(_:)))
@@ -692,6 +694,13 @@ final class EditorToolbarPanel: NSPanel {
     }
     @objc private func cancelEditing() { close(); dismissed?() }
     @objc private func beginScroll() { close(); requestScroll?() }
+    @objc private func beginGIF() {
+        guard let region = captureRegion else { return }
+        guard region.width >= 32, region.height >= 32, NSScreen.screens.contains(where: { $0.frame.contains(region) }) else {
+            showError(CaptureError.message("GIF 录制需在同一显示器内框选至少 32 × 32 点。请先调整选区。")); return
+        }
+        close(); requestGIF?(region)
+    }
     private func refreshStyleVisibility() {
         let supportsStyle = canvas.tool != .crop && canvas.tool != .redact
         styleRow.isHidden = !stylesExpanded || !supportsStyle

@@ -9,6 +9,7 @@ import StitchCore
     try runLongImageBudgetSelfTest()
     try runNewTextDefaultsSelfTest()
     try runEditorLayoutSelfTest()
+    try runGIFToolbarEntrySelfTest()
     try runToolbarInputSelfTest()
     try runTextTransformSelfTest()
     try runTextObjectSelfTest()
@@ -546,4 +547,19 @@ import StitchCore
     let png = try result.png()
     guard let source = CGImageSourceCreateWithData(png as CFData, nil), let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw CaptureError.message("超长 PNG 编码或解码失败") }
     try require(decoded.height == height && decoded.width == width, "超长 PNG 被截断或缩小")
+}
+
+@MainActor private func runGIFToolbarEntrySelfTest() throws {
+    let ctx = CGContext(data: nil, width: 320, height: 200, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    let screen = NSScreen.main!.visibleFrame
+    let rect = CGRect(x: screen.minX+50, y: screen.minY+50, width: 200, height: 120)
+    let editor = EditorController(image: ctx.makeImage()!, region: rect, allowScroll: true)
+    defer { editor.close() }
+    editor.showWindow(nil)
+    var passedRegion: CGRect?
+    editor.requestGIF = { passedRegion = $0 }
+    guard let button = editor.diagnosticToolbarViews.compactMap({ $0 as? NSButton }).first(where: { $0.toolTip == "录制 GIF（使用当前选区，不包含标注）" }) else { throw CaptureError.message("截图工具栏缺少 GIF 入口") }
+    let expected = editor.captureRegion
+    button.performClick(nil)
+    guard passedRegion == expected, passedRegion != nil, !editor.diagnosticGeometry.toolbarVisible else { throw CaptureError.message("GIF 未复用选区或未关闭截图浮层") }
 }

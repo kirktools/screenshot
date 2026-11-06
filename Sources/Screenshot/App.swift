@@ -71,6 +71,8 @@ struct ScreenPermissionAccess {
     private var lastExternalApp: NSRunningApplication?
     private var activationObserver: NSObjectProtocol?
     private var hotkeyWarnings: [String] = []
+    private weak var scrollRecorder: ShortcutRecorder?
+    private var scrollShortcutEnabled: Bool { (UserDefaults.standard.object(forKey: "hotkeys.scroll.enabled") as? Bool) ?? true }
     var permissionAccess = ScreenPermissionAccess()
     // 先拍下桌面，再允许选区窗口激活；测试可替换成合成快照，不读取屏幕。
     var freezeSelection: () async throws -> FrozenCapture = {
@@ -222,6 +224,7 @@ struct ScreenPermissionAccess {
             ("screenshot.region", normal, Shortcut.fallbackNormal, false),
             ("screenshot.scroll", scroll, Shortcut.fallbackScroll, true)
         ] {
+            if scrolling && !scrollShortcutEnabled { hotkeys.unregister(name); continue }
             let action: () -> Void = { [weak self] in self?.capture(scrolling: scrolling) }
             if hotkeys.register(name, shortcut: requested, action: action) { continue }
             let reason = hotkeys.lastError ?? "快捷键不可用"
@@ -238,7 +241,7 @@ struct ScreenPermissionAccess {
         let title = NSMenuItem(title: ApplicationFlavor.name, action: nil, keyEquivalent: ""); menu.addItem(title)
         menu.addItem(.separator())
         add(menu, "\(localized("capture.normal"))   \(normal.label)", #selector(normalCapture))
-        add(menu, "\(localized("capture.scroll"))   \(scroll.label)", #selector(scrollCapture))
+        add(menu, localized("capture.scroll") + (scrollShortcutEnabled ? "   \(scroll.label)" : ""), #selector(scrollCapture))
         add(menu, "录制 GIF…", #selector(recordGIF))
         if editor != nil { add(menu, "打开上次预览", #selector(showEditor)) }
         menu.addItem(.separator()); if !ApplicationFlavor.isDevelopment { add(menu, "检查更新…", #selector(checkForUpdates)) }; add(menu, localized("settings"), #selector(openSettings))
@@ -265,31 +268,36 @@ struct ScreenPermissionAccess {
     @objc private func recordGIF() {
         guard !busy, !installingUpdate else { return }
         guard permissionAccess.isAuthorized() else { requestScreenPermission(); return }
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        previousApp = frontmost?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? lastExternalApp : frontmost
         busy = true; settings?.orderOut(nil); editor?.window?.orderOut(nil)
         let selector = RegionSelector(); self.selector = selector
         selector.completion = { [weak self] region in
             guard let self else { return }; self.selector = nil
             guard let region else { self.busy = false; return }
+            self.previousApp?.activate(options: [])
             Task { @MainActor in
-                do {
-                    guard region.width >= 32, region.height >= 32, NSScreen.screens.contains(where: { $0.frame.contains(region) }) else { throw CaptureError.message("GIF 录制区域需在同一显示器内，且至少 32 × 32 点") }
-                    let provider = MacCaptureProvider(); try await provider.prepare()
-                    let recorder = GIFRecorder(provider: provider, region: region, hotkeys: self.hotkeys)
-                    self.gifRecorder = recorder
-                    recorder.completion = { [weak self] data in
-                        guard let self else { return }; self.gifRecorder = nil; self.busy = false
-                        if let data {
-                            self.gifPreview?.close()
-                            let preview = GIFPreview(data: data); self.gifPreview = preview
-                            preview.closed = { [weak self] in self?.gifPreview = nil }
-                            NSApp.activate(ignoringOtherApps: true); preview.showWindow(nil)
-                        }
-                    }
-                    try recorder.show()
-                } catch { self.gifRecorder = nil; self.busy = false; showError(error) }
+                do { try await self.beginGIF(in: region) }
+                catch { self.gifRecorder = nil; self.busy = false; showError(error) }
             }
         }
         selector.begin()
+    }
+    private func beginGIF(in region: CGRect) async throws {
+        guard region.width >= 32, region.height >= 32, NSScreen.screens.contains(where: { $0.frame.contains(region) }) else { throw CaptureError.message("GIF 录制区域需在同一显示器内，且至少 32 × 32 点") }
+        let provider = MacCaptureProvider(); try await provider.prepare()
+        let recorder = GIFRecorder(provider: provider, region: region, hotkeys: self.hotkeys)
+        self.gifRecorder = recorder
+        recorder.completion = { [weak self] data in
+            guard let self else { return }; self.gifRecorder = nil; self.busy = false
+            if let data {
+                self.gifPreview?.close()
+                let preview = GIFPreview(data: data); self.gifPreview = preview
+                preview.closed = { [weak self] in self?.gifPreview = nil }
+                NSApp.activate(ignoringOtherApps: true); preview.showWindow(nil)
+            }
+        }
+        try recorder.show()
     }
     @objc private func normalCapture() { capture(scrolling: false) }
     @objc private func scrollCapture() { capture(scrolling: true) }
@@ -381,6 +389,14 @@ struct ScreenPermissionAccess {
         let controller = EditorController(image: image, region: region, allowScroll: allowScroll, frozenCapture: frozenCapture)
         editor = controller
         controller.dismissed = { [weak self] in self?.busy = false }
+        controller.requestGIF = { [weak self] region in
+            guard let self else { return }
+            self.busy = true; self.previousApp?.activate(options: [])
+            Task { @MainActor in
+                do { try await self.beginGIF(in: region) }
+                catch { self.gifRecorder = nil; self.busy = false; showError(error) }
+            }
+        }
         controller.requestScroll = { [weak self, weak controller] in
             guard let self, let region = controller?.captureRegion ?? region else { return }
             guard region.width >= 80, region.height >= 100, NSScreen.screens.contains(where: { $0.frame.contains(region) }) else {
@@ -451,14 +467,21 @@ struct ScreenPermissionAccess {
         captureButtons.spacing = 12
         var views: [NSView] = [title, help, captureButtons]
         for (name, shortcut) in [("screenshot.region", normal), ("screenshot.scroll", scroll)] {
-            let label = NSTextField(labelWithString: name == "screenshot.region" ? "区域截图" : "滚动长截图")
+            let label: NSView
+            if name == "screenshot.scroll" {
+                let enabled = NSButton(checkboxWithTitle: "长截图独立快捷键", target: self, action: #selector(toggleScrollShortcut(_:)))
+                enabled.state = scrollShortcutEnabled ? .on : .off
+                enabled.toolTip = "关闭后从普通截图工具栏进入长截图，不占用此快捷键"
+                label = enabled
+            } else { label = NSTextField(labelWithString: "区域截图") }
             let recorder = ShortcutRecorder(string: shortcut.label); recorder.isEditable = false; recorder.isSelectable = false
             recorder.widthAnchor.constraint(equalToConstant: 250).isActive = true
+            if name == "screenshot.scroll" { scrollRecorder = recorder; recorder.isEnabled = scrollShortcutEnabled }
             recorder.onRecord = { [weak self, weak recorder] value in
                 guard let self else { return }
                 let other = name == "screenshot.region" ? self.scroll : self.normal
                 guard value.key != other.key || value.modifiers != other.modifiers else { recorder?.stringValue = "与另一个工具冲突"; return }
-                let ok = self.hotkeys.register(name, shortcut: value) { [weak self] in self?.capture(scrolling: name == "screenshot.scroll") }
+                let ok = name == "screenshot.scroll" && !self.scrollShortcutEnabled ? true : self.hotkeys.register(name, shortcut: value) { [weak self] in self?.capture(scrolling: name == "screenshot.scroll") }
                 guard ok else { recorder?.stringValue = "设置失败，请重试"; self.hotkeyStatusLabel?.stringValue = self.hotkeys.lastError ?? "快捷键不可用"; return }
                 UserDefaults.standard.set(try? JSONEncoder().encode(value), forKey: name)
                 if name == "screenshot.region" { self.normal = value } else { self.scroll = value }
@@ -498,6 +521,11 @@ struct ScreenPermissionAccess {
         NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 24), help.widthAnchor.constraint(equalTo: stack.widthAnchor), diagnosticHelp.widthAnchor.constraint(equalTo: stack.widthAnchor), status.widthAnchor.constraint(equalTo: stack.widthAnchor), hotkeyStatus.widthAnchor.constraint(equalTo: stack.widthAnchor)])
         settings = window; refreshSettingsStatus(); NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
     }
+    @objc private func toggleScrollShortcut(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: "hotkeys.scroll.enabled")
+        scrollRecorder?.isEnabled = scrollShortcutEnabled
+        hotkeyWarnings.removeAll(); registerTools(); refreshMenu(); refreshSettingsStatus()
+    }
     @objc private func toggleCaptureTiming(_ sender: NSButton) {
         UserDefaults.standard.set(sender.state == .on, forKey: "diagnostics.captureTiming")
     }
@@ -528,7 +556,7 @@ struct ScreenPermissionAccess {
             permissionStatusLabel?.stringValue = "点击‘申请录屏权限’向系统发起一次授权请求；‘打开系统录屏设置’仅打开设置页面。若开关已开启仍不可用，请核对下方安装路径。"
         }
         hotkeyStatusLabel?.stringValue = hotkeyWarnings.isEmpty
-            ? "当前快捷键：区域截图 \(normal.label) · 长截图 \(scroll.label)。关闭本窗口后仍常驻菜单栏。"
+            ? "当前快捷键：区域截图 \(normal.label)" + (scrollShortcutEnabled ? " · 长截图 \(scroll.label)" : "；长截图与 GIF 从截图工具栏进入") + "。关闭本窗口后仍常驻菜单栏。"
             : hotkeyWarnings.joined(separator: "\n")
     }
     func applicationDidBecomeActive(_ notification: Notification) { refreshSettingsStatus() }
