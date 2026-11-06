@@ -163,7 +163,7 @@ struct StitchPiece: @unchecked Sendable {
 func compose(_ pieces: [StitchPiece]) -> CGImage? {
     guard let first = pieces.first else { return nil }
     let height = pieces.reduce(0) { $0 + $1.addedRows }
-    guard height <= 30_000, height * first.image.width <= 32_000_000,
+    guard LongCaptureLimits().accepts(width: first.image.width, height: height),
           let ctx = CGContext(data: nil, width: first.image.width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                               space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
     var top = 0

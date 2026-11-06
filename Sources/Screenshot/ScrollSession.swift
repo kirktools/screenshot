@@ -12,6 +12,8 @@ private struct ProcessedFrame: @unchecked Sendable {
     let result: ScrollTrackingResult
     let piece: StitchPiece?
     let checkpoint: ScrollCaptureTracker
+    var topCap: StitchPiece? = nil
+    var bottomCap: StitchPiece? = nil
 }
 
 private actor ScrollProcessor {
@@ -27,8 +29,16 @@ private actor ScrollProcessor {
         case .prepend(let added): rows = added
         default: return ProcessedFrame(result: result, piece: nil, checkpoint: tracker)
         }
-        let piece = copiedStrip(input.image, rows: rows, fromTop: tracker.lastExtensionWasUpward).map { StitchPiece(image: $0, addedRows: rows, frame: frame) }
-        return ProcessedFrame(result: result, piece: piece, checkpoint: tracker)
+        let insets = tracker.contentInsets
+        let body = insets == .none ? input.image : input.image.cropping(to: CGRect(x: 0, y: insets.top, width: input.image.width, height: input.image.height-insets.top-insets.bottom))
+        let piece = body.flatMap { copiedStrip($0, rows: rows, fromTop: tracker.lastExtensionWasUpward) }.map { StitchPiece(image: $0, addedRows: rows, frame: frame) }
+        func cap(_ count: Int, top: Bool) -> StitchPiece? {
+            guard count > 0, let image = copiedStrip(input.image, rows: count, fromTop: top) else { return nil }
+            return StitchPiece(image: image, addedRows: count, frame: image.grayFrame())
+        }
+        return ProcessedFrame(result: result, piece: piece, checkpoint: tracker,
+                              topCap: tracker.lastExtensionWasUpward ? cap(insets.top, top: true) : nil,
+                              bottomCap: tracker.lastExtensionWasUpward ? nil : cap(insets.bottom, top: false))
     }
     func timeout(at time: Double) -> ScrollTrackingResult? { tracker.timeout(at: time) }
 }
@@ -67,6 +77,10 @@ private final class ScrollPreviewCanvas: NSView {
     private let composeImage: @Sendable ([StitchPiece]) async -> CGImage?
     private var task: Task<Void, Never>?
     private var pieces: [StitchPiece] = []
+    private var capHistory: [(top: StitchPiece?, bottom: StitchPiece?, bytes: Int)] = []
+    private var displayPieces: [StitchPiece] {
+        (capHistory.last?.top.map { [$0] } ?? []) + pieces + (capHistory.last?.bottom.map { [$0] } ?? [])
+    }
     // 操作历史按捕获顺序保存；图像条带按文档顺序保存，向上补图也能撤销最近一次操作。
     private var history: [(upward: Bool, checkpoint: ScrollCaptureTracker)] = []
     private var stream: (any RegionFrameStream)?
@@ -86,6 +100,7 @@ private final class ScrollPreviewCanvas: NSView {
     private var automaticRecovery = false
     private var stopped: Bool { lifecycle.isStopped }
     private var started = false
+    private let captureLimits = LongCaptureLimits()
     private var memoryBytes = 0
     private let boundary: CaptureBoundary
     private var previewExpanded = false
@@ -103,7 +118,7 @@ private final class ScrollPreviewCanvas: NSView {
     private let followItem = NSMenuItem(title: "跟随新增内容", action: nil, keyEquivalent: "")
     private let count = NSTextField(labelWithString: "")
     var diagnosticSnapshot: (height: Int, count: Int, paused: Bool, pending: Bool, bytes: Int) {
-        (pieces.reduce(0) { $0 + $1.addedRows }, pieces.count, paused, pending, memoryBytes)
+        (displayPieces.reduce(0) { $0 + $1.addedRows }, pieces.count, paused, pending, memoryBytes)
     }
     var diagnosticControls: [NSView] {
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
@@ -289,7 +304,7 @@ private final class ScrollPreviewCanvas: NSView {
             guard let piece = output.piece else { pending = true; pause("内存不足，无法保存新增片段。已有内容仍保留。"); return }
             paused = false; automaticRecovery = false
             pending = false; confirmPartial = false
-            append(piece, checkpoint: output.checkpoint)
+            append(piece, checkpoint: output.checkpoint, topCap: output.topCap, bottomCap: output.bottomCap)
         case .duplicate:
             paused = false; automaticRecovery = false
             pending = false; confirmPartial = false
@@ -305,34 +320,61 @@ private final class ScrollPreviewCanvas: NSView {
         case .reverse: return "滚动位置无法确认。请回到已捕获内容附近，会自动接续。"
         case .ambiguous: return "重复内容无法唯一定位接缝。请回到预览顶部或底部附近，会自动接续，或扩大选区以包含更多特征。"
         case .incompatibleSize: return "像素尺寸或缩放发生变化，请取消并重新框选。"
-        case .changedContent: return "内容持续变化。请避开固定栏、动画或新消息，再回到预览顶部或底部附近，会自动接续。"
+        case .changedContent: return "内容持续变化。固定区域可能已变化，或正文含动画、新消息；请避开动态区域，再回到预览顶部或底部附近，会自动接续。"
         default: return "持续无法找到可靠重叠，可能滚动过快或内容重排。请回到预览顶部或底部附近，会自动接续；可撤销上一段。"
         }
     }
-    private func append(_ piece: StitchPiece, checkpoint: ScrollCaptureTracker) {
-        let totalRows = pieces.reduce(piece.addedRows) { $0 + $1.addedRows }
-        let bytes = retainedBytes(piece)
-        guard totalRows <= 30_000, totalRows * piece.image.width <= 32_000_000,
-              memoryBytes + bytes + piece.frame.pixels.count * 3 <= 256_000_000 else {
-            pending = true; pause("达到本次捕获的尺寸或内存上限，请完成已有部分并另起一张。")
+    private func append(_ piece: StitchPiece, checkpoint: ScrollCaptureTracker, topCap: StitchPiece?, bottomCap: StitchPiece?) {
+        // 第一次识别固定区域时，把原始首帧无损拆成顶部、正文和底部；首帧内容不丢弃。
+        if pieces.count == 1, history.first?.checkpoint.contentInsets == FixedRegionInsets.none, checkpoint.contentInsets != .none {
+            guard rebaseSeed(insets: checkpoint.contentInsets) else { pending = true; pause("无法分离固定区域，请缩小选区后重试。"); return }
+        }
+        let previous = capHistory.last
+        let nextTop = topCap ?? previous?.top, nextBottom = bottomCap ?? previous?.bottom
+        let totalRows = pieces.reduce(piece.addedRows) { $0 + $1.addedRows } + (nextTop?.addedRows ?? 0) + (nextBottom?.addedRows ?? 0)
+        let bytes = retainedBytes(piece) + (topCap.map(retainedBytes) ?? 0) + (bottomCap.map(retainedBytes) ?? 0)
+        guard captureLimits.accepts(width: piece.image.width, height: totalRows) else {
+            pending = true
+            pause("图片总像素已达本机导出预算（约 \(captureLimits.pixels / 1_000_000) 百万像素），已有内容保留。请完成保存；不会缩图或丢段。")
+            return
+        }
+        guard memoryBytes + bytes + piece.frame.pixels.count * 3 <= captureLimits.retainedBytes else {
+            pending = true
+            pause("已保存条带与撤销检查点达到本机保留内存预算（约 \(captureLimits.retainedBytes / 1_000_000) MB）。请完成保存，已有内容保留。")
             return
         }
         let upward = !pieces.isEmpty && checkpoint.lastExtensionWasUpward
         let changedDirection = history.last?.upward != upward
         if upward { pieces.insert(piece, at: 0) } else { pieces.append(piece) }
-        history.append((upward, checkpoint)); memoryBytes += bytes
+        history.append((upward, checkpoint)); capHistory.append((nextTop, nextBottom, bytes)); memoryBytes += bytes
         let now = ProcessInfo.processInfo.systemUptime
         if changedDirection || now - previewTime >= 0.15 { updatePreview(); previewTime = now }
         showStatus(nil)
     }
+    private func rebaseSeed(insets: FixedRegionInsets) -> Bool {
+        guard let seed = pieces.first, let bodyCrop = seed.image.cropping(to: CGRect(x: 0, y: insets.top, width: seed.image.width, height: seed.image.height-insets.top-insets.bottom)),
+              let bodyImage = copiedStrip(bodyCrop, rows: bodyCrop.height) else { return false }
+        func cap(_ count: Int, top: Bool) -> StitchPiece? {
+            guard count > 0, let image = copiedStrip(seed.image, rows: count, fromTop: top) else { return nil }
+            return StitchPiece(image: image, addedRows: count, frame: image.grayFrame())
+        }
+        let top = cap(insets.top, top: true), bottom = cap(insets.bottom, top: false)
+        guard (insets.top == 0 || top != nil), (insets.bottom == 0 || bottom != nil) else { return false }
+        let body = StitchPiece(image: bodyImage, addedRows: bodyImage.height, frame: seed.frame)
+        var tracker = ScrollCaptureTracker(contentInsets: insets)
+        _ = tracker.consume(seed.frame, at: 0)
+        let bytes = retainedBytes(body) + (top.map(retainedBytes) ?? 0) + (bottom.map(retainedBytes) ?? 0)
+        pieces[0] = body; history[0] = (false, tracker); capHistory[0] = (top, bottom, bytes); memoryBytes = bytes
+        return true
+    }
     private func updatePreview() {
-        let height = pieces.reduce(0) { $0 + $1.addedRows }, width = pieces.first?.image.width ?? 1
+        let height = displayPieces.reduce(0) { $0 + $1.addedRows }, width = pieces.first?.image.width ?? 1
         count.stringValue = "\(width) × \(height) · \(pieces.count) 段"
         preview.toolTip = count.stringValue + "；回车复制并结束，Esc 取消"
         guard height > 0 else { return }
         let targetWidth = max(1, panel.frame.width - 24)
         let scale = targetWidth / CGFloat(width)
-        previewCanvas.zoom = scale; previewCanvas.pieces = pieces
+        previewCanvas.zoom = scale; previewCanvas.pieces = displayPieces
         previewCanvas.setFrameSize(CGSize(width: targetWidth, height: max(preview.contentSize.height, CGFloat(height) * scale)))
         previewCanvas.needsDisplay = true
         if followsTail {
@@ -363,7 +405,8 @@ private final class ScrollPreviewCanvas: NSView {
         lifecycle.invalidateProcessing()
         let previous = history.removeLast()
         let removed = previous.upward ? pieces.removeFirst() : pieces.removeLast()
-        memoryBytes -= retainedBytes(removed)
+        _ = removed
+        memoryBytes -= capHistory.removeLast().bytes
         pending = true; confirmPartial = false
         updatePreview()
         resume()
@@ -389,7 +432,7 @@ private final class ScrollPreviewCanvas: NSView {
                 self.pause("末尾仍有未能接续的画面。再次按回车仅导出已确认部分，或回滚后重试。")
                 return
             }
-            let retained = self.pieces
+            let retained = self.displayPieces
             let image = await self.composeImage(retained)
             guard !self.stopped else { return }
             guard let image else {
@@ -415,7 +458,7 @@ private final class ScrollPreviewCanvas: NSView {
         Task { await source?.stop() }
         hotkeys.unregister("session.finish"); hotkeys.unregister("session.cancel")
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver); self.screenObserver = nil }
-        boundary.close(); notice.orderOut(nil); notice.close(); panel.orderOut(nil); panel.close(); pieces.removeAll(); history.removeAll(); previewCanvas.pieces.removeAll(); memoryBytes = 0
+        boundary.close(); notice.orderOut(nil); notice.close(); panel.orderOut(nil); panel.close(); pieces.removeAll(); history.removeAll(); capHistory.removeAll(); previewCanvas.pieces.removeAll(); memoryBytes = 0
         processor = ScrollProcessor()
     }
     private func retainedBytes(_ piece: StitchPiece) -> Int {

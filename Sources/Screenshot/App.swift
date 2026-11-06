@@ -446,7 +446,7 @@ struct ScreenPermissionAccess {
         window.title = "\(ApplicationFlavor.name) · 设置"; window.isReleasedWhenClosed = false; window.center()
         let title = NSTextField(labelWithString: "随时截图，内容留在本机。")
         title.font = .systemFont(ofSize: 22, weight: .semibold)
-        let help = NSTextField(wrappingLabelWithString: "点击快捷键框，再按新的组合键。长截图时请框选可滚动正文，避开固定顶部栏、输入框和悬浮按钮；可连续向上或向下滚动，回看已捕获内容不会重复追加；快速跳跃或内容重排可能无法接续。")
+        let help = NSTextField(wrappingLabelWithString: "点击快捷键框，再按新的组合键。长截图可自动处理稳定的顶部/底部固定栏，框选时仍请避开正文中央的悬浮遮挡；可连续向上或向下滚动，回看已捕获内容不会重复追加；快速跳跃或内容重排可能无法接续。")
         let captureButtons = NSStackView(views: [NSButton(title: "区域截图", target: self, action: #selector(normalCapture)), NSButton(title: "滚动长截图", target: self, action: #selector(scrollCapture))])
         captureButtons.spacing = 12
         var views: [NSView] = [title, help, captureButtons]

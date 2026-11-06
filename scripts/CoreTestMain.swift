@@ -6,6 +6,9 @@ import Foundation
         let suite = StitchMatcherTests()
         let scroll = ScrollCaptureTrackerTests()
         let tests: [(String, () -> Void)] = [
+            ("固定区域检测仍拒绝正文变化", scroll.testFixedRegionDetectionKeepsSafetyChecks),
+            ("固定顶底栏双向拼接", scroll.testFixedHeaderFooterBidirectional),
+            ("悬浮底栏及检查点恢复", scroll.testFloatingFooterAndCheckpoint),
             ("连续滚动不停稳", suite.testContinuousMotionWithoutStableFrames),
             ("短暂失败恢复", suite.testTransientFailureRecoversAgainstConfirmedAnchor),
             ("丢帧及静止超时", suite.testPersistentGapAndIdleTimeout),

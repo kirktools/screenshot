@@ -22,16 +22,27 @@ public struct ScrollCaptureTracker: Sendable {
     private var failureSince: Double?
     private var lastFailure: MatchResult = .insufficientOverlap
     private let matcher = StitchMatcher()
+    public private(set) var contentInsets: FixedRegionInsets = .none
     public let recoveryInterval: Double
     public private(set) var hasUnmatchedFrame = false
     public private(set) var lastExtensionWasUpward = false
     public var height: Int { guard let head, let tail else { return 0 }; return tail.offset - head.offset + head.frame.height }
-    public init(recoveryInterval: Double = 0.8) { self.recoveryInterval = recoveryInterval }
+    public init(recoveryInterval: Double = 0.8, contentInsets: FixedRegionInsets = .none) { self.recoveryInterval = recoveryInterval; self.contentInsets = contentInsets }
 
     /// 重试保留两端，不把当前未知画面当新起点。
     public mutating func retry() { failureSince = nil }
 
-    public mutating func consume(_ frame: GrayFrame, at time: Double) -> ScrollTrackingResult {
+    public mutating func consume(_ input: GrayFrame, at time: Double) -> ScrollTrackingResult {
+        if contentInsets == .none, let current, let head, let tail, head.offset == tail.offset,
+           matcher.verticalMatch(previous: current.frame, next: input) != .unchanged,
+           let detected = matcher.fixedRegionInsets(previous: current.frame, next: input) {
+            contentInsets = detected
+            self.current = Anchor(frame: detected.crop(current.frame), offset: current.offset)
+            self.head = Anchor(frame: detected.crop(head.frame), offset: head.offset)
+            self.tail = Anchor(frame: detected.crop(tail.frame), offset: tail.offset)
+        }
+        guard input.height > contentInsets.top + contentInsets.bottom else { return fail(.incompatibleSize, at: time) }
+        let frame = contentInsets == .none ? input : contentInsets.crop(input)
         guard let current, let head, let tail else {
             let anchor = Anchor(frame: frame, offset: 0)
             self.current = anchor; self.head = anchor; self.tail = anchor

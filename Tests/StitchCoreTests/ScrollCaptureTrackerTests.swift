@@ -119,3 +119,58 @@ final class ScrollCaptureTrackerTests: XCTestCase {
         XCTAssertNotNil(lifecycle.beginFinish())
     }
 }
+
+extension ScrollCaptureTrackerTests {
+    private func fixedFrame(_ offset: Int, top: Int = 24, bottom: Int = 32, floating: Bool = false) -> GrayFrame {
+        let source = frame(offset), header = frame(2300), footer = frame(3100)
+        var pixels = source.pixels
+        for y in 0..<source.height { for x in 0..<source.width {
+            if y < top { pixels[y*source.width+x] = header.pixels[y*source.width+x] }
+            if y >= source.height-bottom && (!floating || (x >= 16 && x < 48)) { pixels[y*source.width+x] = footer.pixels[y*source.width+x] }
+        } }
+        return GrayFrame(width: source.width, height: source.height, pixels: pixels, sourceWidth: source.sourceWidth)
+    }
+    func testFixedHeaderFooterBidirectional() {
+        var tracker = ScrollCaptureTracker()
+        XCTAssertEqual(tracker.consume(fixedFrame(100), at: 0), .seed)
+        XCTAssertEqual(tracker.consume(fixedFrame(120), at: 0.1), .append(rows: 20))
+        XCTAssertEqual(tracker.contentInsets, FixedRegionInsets(top: 24, bottom: 32))
+        XCTAssertEqual(tracker.consume(fixedFrame(140), at: 0.2), .append(rows: 20))
+        XCTAssertEqual(tracker.consume(fixedFrame(120), at: 0.3), .duplicate)
+        XCTAssertEqual(tracker.consume(fixedFrame(80), at: 0.4), .prepend(rows: 20))
+    }
+    func testFloatingFooterAndCheckpoint() {
+        var tracker = ScrollCaptureTracker()
+        _ = tracker.consume(fixedFrame(100, floating: true), at: 0)
+        XCTAssertEqual(tracker.consume(fixedFrame(120, floating: true), at: 0.1), .append(rows: 20))
+        let saved = tracker
+        XCTAssertEqual(tracker.contentInsets.bottom, 32)
+        _ = tracker.consume(fixedFrame(140, floating: true), at: 0.2)
+        tracker = saved
+        XCTAssertEqual(tracker.consume(fixedFrame(130, floating: true), at: 0.3), .append(rows: 10))
+    }
+}
+
+extension ScrollCaptureTrackerTests {
+    func testFixedRegionDetectionKeepsSafetyChecks() {
+        for (top, bottom) in [(24, 0), (0, 32), (24, 32)] {
+            var tracker = ScrollCaptureTracker()
+            _ = tracker.consume(fixedFrame(100, top: top, bottom: bottom), at: 0)
+            XCTAssertEqual(tracker.consume(fixedFrame(140, top: top, bottom: bottom), at: 0.1), .append(rows: 40))
+            XCTAssertEqual(tracker.contentInsets, FixedRegionInsets(top: top, bottom: bottom))
+            var changed = fixedFrame(160, top: top, bottom: bottom).pixels
+            for y in 100..<140 { for x in 0..<64 { changed[y*64+x] = UInt8((x+y) % 255) } }
+            let frame = GrayFrame(width: 64, height: 240, pixels: changed, sourceWidth: 640)
+            let result = tracker.consume(frame, at: 0.2)
+            XCTAssertTrue({ if case .recovering = result { return true }; return false }())
+        }
+        var normal = ScrollCaptureTracker()
+        _ = normal.consume(frame(100), at: 0)
+        XCTAssertEqual(normal.consume(frame(140), at: 0.1), .append(rows: 40))
+        XCTAssertEqual(normal.contentInsets, .none)
+        var unknown = ScrollCaptureTracker()
+        _ = unknown.consume(fixedFrame(100), at: 0)
+        _ = unknown.consume(fixedFrame(1000), at: 0.1)
+        XCTAssertEqual(unknown.contentInsets, .none)
+    }
+}

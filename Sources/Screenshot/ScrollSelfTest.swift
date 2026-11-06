@@ -38,6 +38,7 @@ import UniformTypeIdentifiers
 }
 
 @MainActor func runScrollSessionSelfTest() async throws {
+    try await runFixedRegionScrollSelfTest()
     func require(_ condition: Bool, _ message: String) throws {
         if !condition { throw CaptureError.message(message) }
     }
@@ -431,4 +432,73 @@ import UniformTypeIdentifiers
     }
     guard CGImageDestinationFinalize(gif) else { throw CaptureError.message("文档 GIF 写入失败") }
     print("离线文档素材通过：原生控件、合成滚动帧及逐像素结果验证；未读取桌面。")
+}
+
+/// 固定顶栏与局部悬浮底栏经过真实会话、撤销、PNG 输出；逐像素验证不重复、不漏正文。
+@MainActor private func runFixedRegionScrollSelfTest() async throws {
+    func require(_ ok: Bool, _ message: String) throws { if !ok { throw CaptureError.message(message) } }
+    func wait(_ condition: () -> Bool) async throws {
+        let limit = ProcessInfo.processInfo.systemUptime+4
+        while !condition() {
+            if ProcessInfo.processInfo.systemUptime > limit { throw CaptureError.message("固定区域会话等待超时") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+    let width = 96, height = 300, top = 30, bottom = 40
+    func pixel(_ y: Int, _ x: Int) -> [UInt8] {
+        var v = UInt64(y*width+x+1) &* 0x9E3779B97F4A7C15
+        v = (v ^ (v >> 30)) &* 0xBF58476D1CE4E5B9
+        v = (v ^ (v >> 27)) &* 0x94D049BB133111EB
+        v = v ^ (v >> 31)
+        return [UInt8(truncatingIfNeeded: v), UInt8(truncatingIfNeeded: v >> 8), UInt8(truncatingIfNeeded: v >> 16), 255]
+    }
+    func viewPixels(_ offset: Int, floating: Bool) -> [UInt8] {
+        var bytes: [UInt8] = []
+        for y in 0..<height { for x in 0..<width {
+            let row = y < top ? 2500+y : y >= height-bottom && (!floating || (x >= 20 && x < 76)) ? 3500+y : offset+y-top
+            bytes += pixel(row, x)
+        } }
+        return bytes
+    }
+    func image(_ bytes: [UInt8], height: Int) -> CGImage {
+        CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width*4,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                provider: CGDataProvider(data: Data(bytes) as CFData)!, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+    }
+    func rgba(_ image: CGImage) -> Data {
+        var bytes = [UInt8](repeating: 0, count: image.width*image.height*4)
+        bytes.withUnsafeMutableBytes { buffer in
+            let ctx = CGContext(data: buffer.baseAddress, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width*4, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        }
+        return Data(bytes)
+    }
+    for floating in [false, true] {
+        let provider = FixtureProvider(), board = NSPasteboard(name: .init("Screenshot-Fixed-Test-"+UUID().uuidString))
+        defer { board.releaseGlobally() }
+        let session = ScrollSession(provider: provider, region: CGRect(x: 100, y: 100, width: width, height: height), hotkeys: HotkeyRegistry(), clipboard: board)
+        defer { session.cancelCapture() }
+        var output: CGImage?
+        session.completion = { result, _ in output = result }
+        _ = session.start(registerHotkeys: false, showPanel: false)
+        try await Task.sleep(for: .milliseconds(30))
+        for (offset, expectedHeight) in [(100,300), (120,320), (80,340)] {
+            provider.source.send(image(viewPixels(offset, floating: floating), height: height))
+            do { try await wait { session.diagnosticSnapshot.height == expectedHeight } }
+            catch { throw CaptureError.message("固定区域 floating=\(floating) offset=\(offset) expected=\(expectedHeight) actual=\(session.diagnosticSnapshot)：\(error)") }
+        }
+        session.undo()
+        try require(session.diagnosticSnapshot.height == 320, "固定区域向上撤销后尺寸错误")
+        provider.source.send(image(viewPixels(140, floating: floating), height: height))
+        try await wait { session.diagnosticSnapshot.height == 340 }
+        session.finishCapture(); try await wait { output != nil }
+        let first = viewPixels(100, floating: floating), last = viewPixels(140, floating: floating)
+        var expected = Array(first.prefix(top*width*4))
+        for y in 100..<(140+height-top-bottom) { for x in 0..<width { expected += pixel(y, x) } }
+        expected += Array(last.suffix(bottom*width*4))
+        let reference = image(expected, height: 340)
+        try require(output!.width == width && output!.height == 340 && rgba(output!) == rgba(reference), "固定区域输出重复或正文接缝错误")
+        let decoded = board.data(forType: .png).flatMap { CGImageSourceCreateWithData($0 as CFData, nil) }.flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+        try require(decoded.map(rgba) == rgba(reference), "固定区域 PNG 剪贴板输出不一致")
+    }
 }

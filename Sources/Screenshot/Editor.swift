@@ -19,7 +19,7 @@ enum AnnotationColor: String, CaseIterable {
 }
 
 /// 不使用模板符号着色，避免系统主题把所有颜色统一染成强调色。
-final class ColorSwatchButton: NSButton {
+final class ColorSwatchButton: EditorIconButton {
     var swatchColor: NSColor = .systemRed
     override var intrinsicContentSize: NSSize { NSSize(width: 26, height: 26) }
     override func draw(_ dirtyRect: NSRect) {
@@ -113,11 +113,15 @@ struct EditState {
     var tool: EditTool = .arrow
     var selectedColor: AnnotationColor = .red
     var strokeWidth: CGFloat = 3
+    private var newTextFontSize: CGFloat = 28
+    private var newTextRotation: CGFloat = 0
+    private var newTextOpacity: CGFloat = 1
     var textFontSize: CGFloat = 28
     var textRotation: CGFloat = 0
     var textOpacity: CGFloat = 1
     private(set) var selectedText: Int?
     private var editingText: Int?
+    private var textTransform: TextTransformGesture?
     private var movingText: (point: CGPoint, original: Annotation)?
     var zoom: CGFloat = 1
     var preferredWidth: CGFloat = 960
@@ -149,18 +153,25 @@ struct EditState {
         var visible = state
         if let editingText, visible.annotations.indices.contains(editingText) { visible.annotations.remove(at: editingText) }
         paint(visible, transient: drag)
-        if let selectedText, state.annotations.indices.contains(selectedText), editingText == nil {
+        if let selectedText, state.annotations.indices.contains(selectedText), editingText == nil, tool == .text {
             let a = state.annotations[selectedText]
             NSGraphicsContext.saveGraphicsState()
             let transform = NSAffineTransform(); transform.translateX(by: a.start.x, yBy: a.start.y); transform.rotate(byDegrees: a.rotation); transform.concat()
             NSColor.systemTeal.setStroke()
             let border = NSBezierPath(rect: CGRect(origin: .zero, size: a.textSize).insetBy(dx: -4, dy: -4)); border.lineWidth = 1 / zoom; border.stroke()
+            let gap = 24 / zoom, size = a.textSize
+            let stem = NSBezierPath(); stem.move(to: CGPoint(x: size.width/2, y: -4)); stem.line(to: CGPoint(x: size.width/2, y: -gap)); stem.lineWidth = 1/zoom; stem.stroke()
+            let local = [CGPoint(x: -4, y: -4), CGPoint(x: size.width+4, y: -4), CGPoint(x: -4, y: size.height+4), CGPoint(x: size.width+4, y: size.height+4), CGPoint(x: size.width/2, y: -gap)]
+            for point in local {
+                let handle = NSBezierPath(ovalIn: CGRect(x: point.x-4/zoom, y: point.y-4/zoom, width: 8/zoom, height: 8/zoom))
+                NSColor.white.setFill(); handle.fill(); NSColor.systemTeal.setStroke(); handle.lineWidth = 1/zoom; handle.stroke()
+            }
             NSGraphicsContext.restoreGraphicsState()
         }
         NSGraphicsContext.restoreGraphicsState()
     }
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { cancelRequested?() }
+        if event.keyCode == 53 { if textTransform != nil { endTextTransform(cancel: true) } else { cancelRequested?() } }
         else if event.keyCode == 36 || event.keyCode == 76 { finishRequested?() }
         else { super.keyDown(with: event) }
     }
@@ -173,24 +184,46 @@ struct EditState {
         let p = point(event)
         commitText()
         if tool == .text {
+            if beginTextTransform(at: p) { return }
             selectText(at: p)
             if let index = selectedText, event.clickCount < 2 {
                 movingText = (p, state.annotations[index]); update(); return
             }
             editingText = selectedText
             textOrigin = p; textColor = selectedColor; textLineWidth = strokeWidth / zoom
-            let field = NSTextField(frame: CGRect(x: p.x * zoom, y: p.y * zoom, width: max(80, min(320, bounds.width - p.x * zoom)), height: max(26, 35 * zoom)))
+            let field = NSTextField()
             if let editingText {
                 let a = state.annotations[editingText]; textOrigin = a.start; textColor = a.color
                 textFontSize = a.fontSize; textRotation = a.rotation; textOpacity = a.opacity
-                field.frame.origin = CGPoint(x: a.start.x * zoom, y: a.start.y * zoom); field.stringValue = a.text
+                field.stringValue = a.text
             }
-            field.placeholderString = "输入文字，回车确认"
-            field.font = .systemFont(ofSize: max(10, textFontSize * zoom), weight: .semibold)
+            configureTextInput(field, at: textOrigin)
             field.textColor = textColor.value; field.delegate = self
             field.target = self; field.action = #selector(finishText)
             textField = field; addSubview(field); window?.makeFirstResponder(field)
         } else { drag = Annotation(tool: tool, start: p, end: p, color: selectedColor, lineWidth: strokeWidth / zoom) }
+    }
+    /// 输入控件独立于标注原点：靠边时移动编辑框，不改变最终文字位置。
+    func configureTextInput(_ field: NSTextField, at origin: CGPoint) {
+        let visible = visibleRect.intersection(bounds).insetBy(dx: 4, dy: 4)
+        let area = visible.width > 0 && visible.height > 0 ? visible : bounds
+        let requested = max(10, textFontSize * zoom)
+        let value = field.currentEditor()?.string ?? field.stringValue
+        let fitted = value.isEmpty ? min(13, requested) : min(requested, max(10, (area.height - 14) / 1.3))
+        let font = NSFont.systemFont(ofSize: fitted, weight: .semibold)
+        field.font = font
+        if let editor = field.currentEditor() as? NSTextView {
+            let selection = editor.selectedRange(); editor.font = font; editor.setSelectedRange(selection)
+        }
+        field.placeholderAttributedString = NSAttributedString(string: "输入文字，回车确认", attributes: [.font: NSFont.systemFont(ofSize: min(13, fitted)), .foregroundColor: NSColor.placeholderTextColor])
+        field.cell?.usesSingleLineMode = true; field.cell?.isScrollable = true; field.cell?.wraps = false
+        let lineHeight = ceil(font.ascender - font.descender + font.leading) + 12
+        let textWidth = (value as NSString).size(withAttributes: [.font: font]).width + 20
+        let width = min(area.width, max(180, min(480, textWidth)))
+        let height = min(area.height, max(30, lineHeight))
+        let x = min(max(area.minX, origin.x * zoom), area.maxX - width)
+        let y = min(max(area.minY, origin.y * zoom), area.maxY - height)
+        field.frame = CGRect(x: x, y: y, width: width, height: height)
     }
     @objc private func finishText() { commitText(); window?.makeFirstResponder(self) }
     func commitText() {
@@ -204,6 +237,10 @@ struct EditState {
         }
         editingText = nil; update()
     }
+    func controlTextDidChange(_ notification: Notification) {
+        guard let field = notification.object as? NSTextField, field === textField else { return }
+        configureTextInput(field, at: textOrigin)
+    }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
             textField?.removeFromSuperview(); textField = nil; editingText = nil; update(); window?.makeFirstResponder(self); return true
@@ -211,6 +248,7 @@ struct EditState {
         return false
     }
     override func mouseDragged(with event: NSEvent) {
+        if textTransform != nil { updateTextTransform(at: point(event)); return }
         if let movingText, let selectedText {
             let p = point(event), delta = CGPoint(x: p.x-movingText.point.x, y: p.y-movingText.point.y)
             var a = movingText.original; a.start.x += delta.x; a.start.y += delta.y; a.end.x += delta.x; a.end.y += delta.y
@@ -219,6 +257,7 @@ struct EditState {
         guard let a = drag else { return }; drag = Annotation(tool: a.tool, start: a.start, end: point(event), color: a.color, lineWidth: a.lineWidth); needsDisplay = true
     }
     override func mouseUp(with event: NSEvent) {
+        if textTransform != nil { updateTextTransform(at: point(event)); endTextTransform(); return }
         if let movingText, let selectedText {
             let result = state.annotations[selectedText]
             state.annotations[selectedText] = movingText.original
@@ -241,16 +280,43 @@ struct EditState {
         }
         update()
     }
+    @discardableResult func beginTextTransform(at point: CGPoint) -> Bool {
+        guard let selectedText, state.annotations.indices.contains(selectedText) else { return false }
+        let a = state.annotations[selectedText]
+        guard let index = a.textHandlePoints(zoom: zoom).firstIndex(where: { hypot($0.x-point.x, $0.y-point.y) <= 9 / zoom }) else { return false }
+        textTransform = TextTransformGesture(original: a, pointer: point, mode: index == 4 ? .rotate : .scale)
+        return true
+    }
+    func updateTextTransform(at point: CGPoint) {
+        guard let textTransform, let selectedText else { return }
+        let a = textTransform.annotation(at: point); state.annotations[selectedText] = a
+        textFontSize = a.fontSize; textRotation = a.rotation; update()
+    }
+    func endTextTransform(cancel: Bool = false) {
+        guard let gesture = textTransform, let selectedText else { return }
+        let result = state.annotations[selectedText]; state.annotations[selectedText] = gesture.original
+        textTransform = nil
+        if !cancel && (abs(result.fontSize - gesture.original.fontSize) > 0.001 || abs(result.rotation - gesture.original.rotation) > 0.001) {
+            checkpoint(); state.annotations[selectedText] = result
+        }
+        textFontSize = state.annotations[selectedText].fontSize; textRotation = state.annotations[selectedText].rotation
+        update()
+    }
     func selectText(at point: CGPoint) {
         selectedText = state.annotations.indices.reversed().first { state.annotations[$0].tool == .text && state.annotations[$0].containsText(point) }
         if let selectedText {
             let a = state.annotations[selectedText]; textFontSize = a.fontSize; textRotation = a.rotation; textOpacity = a.opacity; selectedColor = a.color
+        } else {
+            textFontSize = newTextFontSize; textRotation = newTextRotation; textOpacity = newTextOpacity
         }
         update()
     }
     func styleSelectedText(fontSize: CGFloat, rotation: CGFloat, opacity: CGFloat) {
         commitText(); textFontSize = fontSize; textRotation = rotation; textOpacity = opacity
+        newTextFontSize = fontSize; newTextRotation = rotation; newTextOpacity = opacity
         if let selectedText, state.annotations.indices.contains(selectedText) {
+            let current = state.annotations[selectedText]
+            guard current.fontSize != fontSize || current.rotation != rotation || current.opacity != opacity || current.color != selectedColor else { update(); return }
             checkpoint(); state.annotations[selectedText].fontSize = fontSize
             state.annotations[selectedText].rotation = rotation; state.annotations[selectedText].opacity = opacity
             state.annotations[selectedText].color = selectedColor
@@ -308,10 +374,18 @@ extension NSAffineTransform {
     let alert = NSAlert(); alert.window.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 3); alert.messageText = "Screenshot"; alert.informativeText = error.localizedDescription; alert.runModal()
 }
 
-@MainActor final class EditorController: NSWindowController {
+/// 编辑参数需要键盘焦点；滚动采集控件继续使用不抢焦点的 PassivePanel。
+final class EditorToolbarPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
+@MainActor final class EditorController: NSWindowController, NSTextFieldDelegate {
     let canvas: EditorCanvas
     private let info = NSTextField(labelWithString: "")
     private let toolbar: NSPanel
+    private var toolbarOriginOverride: CGPoint?
+    private var toolbarDragOrigin = CGPoint.zero
     private var backdrops: [NSWindow] = []
     private var anchor: CGRect
     private var frozenCapture: FrozenCapture?
@@ -329,6 +403,18 @@ extension NSAffineTransform {
     private let rotationField = NSTextField(string: "0")
     private let opacityField = NSTextField(string: "100")
     private var colorButtons: [NSButton] = []
+    private let styleRow = NSStackView()
+    private let textRow = NSStackView()
+    private let widthOptions = NSStackView()
+    private var stylesExpanded = false
+    private var advancedExpanded = false
+    private var toolButtons: [NSButton] = []
+    private let textPresets = NSStackView()
+    private let advancedButton = EditorIconButton()
+    private let shapeGroup = EditorShapeGroup()
+    private var shapeButton: NSButton?
+    private var lastShape: EditTool = .rectangle
+    let shapeMenu = NSMenu()
     var diagnosticGeometry: (image: CGRect, toolbar: CGRect, toolbarVisible: Bool, backdrops: Int, scrolling: Bool, elasticity: NSScrollView.Elasticity) {
         (window?.frame ?? .zero, toolbar.frame, toolbar.isVisible, backdrops.filter(\.isVisible).count, scrollView.permitsScrolling, scrollView.verticalScrollElasticity)
     }
@@ -349,14 +435,14 @@ extension NSAffineTransform {
         anchor = initial
         isLongImage = CGFloat(image.height) * min(1, initial.width / CGFloat(image.width)) > initial.height + 0.5
         let window = EditorCaptureWindow(contentRect: initial, styleMask: [.borderless], backing: .buffered, defer: false)
-        toolbar = PassivePanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        toolbar = EditorToolbarPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init(window: window)
         window.title = "Screenshot · 原位标注"
         window.isReleasedWhenClosed = false; window.level = .screenSaver
         window.backgroundColor = .clear; window.isOpaque = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         toolbar.isReleasedWhenClosed = false; toolbar.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
-        toolbar.hidesOnDeactivate = false
+        toolbar.hidesOnDeactivate = false; toolbar.becomesKeyOnlyIfNeeded = true
         toolbar.backgroundColor = .clear; toolbar.isOpaque = false; toolbar.hasShadow = true
         toolbar.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         canvas.preferredWidth = initial.width
@@ -389,51 +475,119 @@ extension NSAffineTransform {
                 return self.reframe(to: next, remember: true)
             }
         }
-        let tools = NSSegmentedControl(labels: EditTool.allCases.map(\.rawValue), trackingMode: .selectOne, target: self, action: #selector(selectTool(_:)))
-        tools.selectedSegment = 1
+        let tools = NSStackView(); tools.spacing = 6; tools.distribution = .fill; tools.alignment = .centerY
+        for tool in [EditTool.rectangle, .arrow, .text, .redact] {
+            if tool == .rectangle {
+                let button = icon("rectangle", "矩形 / 圆形", target: self, action: #selector(activateShape))
+                button.setButtonType(.toggle); shapeButton = button
+                shapeGroup.spacing = 0; shapeGroup.addArrangedSubview(button)
+                let arrow = icon("chevron.down", "选择矩形或圆形", target: self, action: #selector(showShapes(_:)), minimumWidth: 14)
+                arrow.widthAnchor.constraint(equalToConstant: 14).isActive = true
+                shapeGroup.addArrangedSubview(arrow); tools.addArrangedSubview(shapeGroup)
+                for shape in [EditTool.rectangle, .ellipse] {
+                    let item = NSMenuItem(title: shape.rawValue, action: #selector(selectShape(_:)), keyEquivalent: "")
+                    item.target = self; item.tag = EditTool.allCases.firstIndex(of: shape)!
+                    item.image = CaptureIcons.toolbar(shape == .rectangle ? "rectangle" : "circle")
+                    shapeMenu.addItem(item)
+                }
+            } else {
+                let symbols: [EditTool: String] = [.arrow: "arrow.up.right", .text: "textbox", .redact: "square.grid.3x3.fill"]
+                let button = icon(symbols[tool]!, tool == .redact ? "打码（实心遮挡）" : tool.rawValue, target: self, action: #selector(selectToolButton(_:)))
+
+                button.tag = EditTool.allCases.firstIndex(of: tool)!; button.setButtonType(.toggle)
+                button.state = tool == .arrow ? .on : .off; button.contentTintColor = tool == .arrow ? .systemTeal : .labelColor; toolButtons.append(button); tools.addArrangedSubview(button)
+            }
+        }
         let undo = icon("arrow.uturn.backward", "撤销 ⌘Z", target: canvas, action: #selector(EditorCanvas.undo(_:)))
         let redo = icon("arrow.uturn.forward", "重做 ⇧⌘Z", target: canvas, action: #selector(EditorCanvas.redo(_:)))
-        let save = icon("square.and.arrow.down", "保存 PNG ⌘S", target: canvas, action: #selector(EditorCanvas.saveDocument(_:)))
+        let save = icon("square.and.arrow.down", "保存 PNG ⌘S", target: self, action: #selector(saveEditing))
         let cancel = icon("xmark", "取消 Esc", target: self, action: #selector(cancelEditing))
         let done = icon("checkmark", "复制并完成 ↩", target: self, action: #selector(completeEditing))
         done.contentTintColor = .systemGreen; cancel.contentTintColor = .systemRed
-        var controls: [NSView] = [info, tools, undo, redo]
+        let handle = EditorToolbarDragHandle()
+        handle.isBordered = false; handle.toolTip = "拖动工具栏；双击恢复自动位置"
+        handle.widthAnchor.constraint(equalToConstant: 16).isActive = true
+        handle.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        handle.began = { [weak self] in self?.toolbarDragOrigin = self?.toolbar.frame.origin ?? .zero }
+        handle.moved = { [weak self] delta in
+            guard let self else { return }
+            self.moveToolbar(to: CGPoint(x: self.toolbarDragOrigin.x+delta.x, y: self.toolbarDragOrigin.y+delta.y))
+        }
+        handle.reset = { [weak self] in self?.toolbarOriginOverride = nil; self?.layoutCapture() }
+        var controls: [NSView] = [handle, info, tools, undo, redo]
         if allowScroll {
             let button = icon("arrow.up.and.down", "滚动长截图（重新采集选区）", target: self, action: #selector(beginScroll))
-            button.image = CaptureIcons.scrollCapture
+            button.image = CaptureIcons.toolbar("arrow.up.and.down")
             controls.append(button)
         }
-        controls += [save, cancel, done]
+        let pin = icon("pin", "钉到屏幕", target: self, action: #selector(pinEditing))
+        let more = icon("ellipsis", "更多：裁剪", target: self, action: #selector(showMore(_:)))
+        controls += [more, save, pin, cancel, done]
         let mainRow = NSStackView(views: controls); mainRow.spacing = 8
-        var styles: [NSView] = [NSTextField(labelWithString: "颜色")]
+        mainRow.distribution = .fill; mainRow.alignment = .centerY; mainRow.identifier = NSUserInterfaceItemIdentifier("editor.main")
+        for (index, size) in [20.0, 28.0, 44.0].enumerated() {
+            let button = EditorIconButton(title: ["小", "中", "大"][index], target: self, action: #selector(selectTextPreset(_:)))
+            button.tag = Int(size); button.isBordered = false; button.toolTip = "文字字号 \(Int(size))"
+            textPresets.addArrangedSubview(button)
+        }
+        textPresets.spacing = 4
+        let leftStyles = NSStackView(views: [textPresets]); leftStyles.spacing = 6
+        leftStyles.identifier = NSUserInterfaceItemIdentifier("editor.styles.left")
+        leftStyles.distribution = .fill; leftStyles.alignment = .centerY
+        let rightStyles = NSStackView(); rightStyles.spacing = 6
+        rightStyles.identifier = NSUserInterfaceItemIdentifier("editor.styles.right")
+        rightStyles.distribution = .fill; rightStyles.alignment = .centerY
         for (index, color) in AnnotationColor.allCases.enumerated() {
             let button = ColorSwatchButton(title: color.rawValue, target: self, action: #selector(selectColor(_:)))
             button.swatchColor = color.value; button.isBordered = false
             button.tag = index; button.toolTip = color.rawValue
             button.bezelStyle = .texturedRounded; button.setButtonType(.toggle)
             button.state = index == 0 ? .on : .off
-            colorButtons.append(button); styles.append(button)
+            colorButtons.append(button); rightStyles.addArrangedSubview(button)
         }
-        styles.append(NSTextField(labelWithString: "线宽"))
-        let widths = NSSegmentedControl(labels: ["细", "中", "粗"], trackingMode: .selectOne, target: self, action: #selector(selectWidth(_:)))
-        widths.selectedSegment = 1; styles.append(widths)
-        let styleRow = NSStackView(views: styles); styleRow.spacing = 6
+        let widths = NSSegmentedControl(labels: ["·", "●", "⬤"], trackingMode: .selectOne, target: self, action: #selector(selectWidth(_:)))
+        widths.setToolTip("细", forSegment: 0); widths.setToolTip("中", forSegment: 1); widths.setToolTip("粗", forSegment: 2)
+        widths.selectedSegment = 1; widthOptions.addArrangedSubview(widths); widthOptions.spacing = 6; leftStyles.addArrangedSubview(widthOptions)
+        advancedButton.image = CaptureIcons.toolbar("ellipsis")
+        advancedButton.toolTip = "精确调整字号、旋转和不透明度"; advancedButton.isBordered = false
+        advancedButton.target = self; advancedButton.action = #selector(toggleAdvanced)
+        rightStyles.addArrangedSubview(advancedButton)
+        let gap = NSView(); gap.setContentHuggingPriority(.init(1), for: .horizontal)
+        gap.widthAnchor.constraint(greaterThanOrEqualToConstant: 16).isActive = true
+        for group in [leftStyles, rightStyles] {
+            group.setContentHuggingPriority(.required, for: .horizontal)
+            group.setContentCompressionResistancePriority(.required, for: .horizontal)
+        }
+        [leftStyles, gap, rightStyles].forEach { styleRow.addArrangedSubview($0) }; styleRow.spacing = 6; styleRow.distribution = .fill; styleRow.alignment = .centerY
+        styleRow.identifier = NSUserInterfaceItemIdentifier("editor.styles")
         var textStyles: [NSView] = []
         for (label, field) in [("字号", fontSizeField), ("旋转°", rotationField), ("不透明度%", opacityField)] {
             field.widthAnchor.constraint(equalToConstant: 52).isActive = true
-            field.target = self; field.action = #selector(changeTextStyle)
+            field.target = self; field.action = #selector(changeTextStyle); field.delegate = self
+            field.identifier = NSUserInterfaceItemIdentifier(label); field.toolTip = label
             textStyles += [NSTextField(labelWithString: label), field]
         }
         let textHelp = NSTextField(labelWithString: "文字工具：单击选中拖动，双击改文字")
-        textHelp.font = .systemFont(ofSize: 11); textStyles.append(textHelp)
-        let textRow = NSStackView(views: textStyles); textRow.spacing = 6
-        let rows = NSStackView(views: [mainRow, styleRow, textRow]); rows.orientation = .vertical; rows.alignment = .leading; rows.spacing = 8
+        textHelp.font = .systemFont(ofSize: 11); textHelp.toolTip = "拖动文字角点缩放，上方手柄旋转；双击修改文字"
+        textStyles.forEach { textRow.addArrangedSubview($0) }; textRow.spacing = 6; textRow.distribution = .fill; textRow.alignment = .centerY
+        textRow.identifier = NSUserInterfaceItemIdentifier("editor.precision")
+        styleRow.isHidden = true; textRow.isHidden = true
+        let rows = NSStackView(views: [mainRow, styleRow, textRow]); rows.orientation = .vertical; rows.alignment = .leading; rows.spacing = 8; rows.distribution = .fill
+        styleRow.widthAnchor.constraint(equalTo: mainRow.widthAnchor).isActive = true
+        for row in [mainRow, textRow] {
+            row.setContentHuggingPriority(.required, for: .horizontal)
+            row.setContentCompressionResistancePriority(.required, for: .horizontal)
+        }
         toolbar.contentView = captureToolbar(views: [rows])
         canvas.changed = { [weak self] in
             guard let self else { return }; self.layoutCapture()
-            self.fontSizeField.doubleValue = self.canvas.textFontSize
-            self.rotationField.doubleValue = self.canvas.textRotation
-            self.opacityField.doubleValue = self.canvas.textOpacity * 100
+            for button in self.colorButtons {
+                button.state = AnnotationColor.allCases[button.tag] == self.canvas.selectedColor ? .on : .off
+                button.needsDisplay = true
+            }
+            if self.fontSizeField.currentEditor() == nil { self.fontSizeField.doubleValue = self.canvas.textFontSize }
+            if self.rotationField.currentEditor() == nil { self.rotationField.doubleValue = self.canvas.textRotation }
+            if self.opacityField.currentEditor() == nil { self.opacityField.doubleValue = self.canvas.textOpacity * 100 }
         }
         canvas.feedback = { [weak self] message in self?.info.toolTip = message }
         canvas.finishRequested = { [weak self] in self?.completeEditing() }
@@ -450,9 +604,13 @@ extension NSAffineTransform {
         window.makeFirstResponder(canvas)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    private func icon(_ name: String, _ title: String, target: AnyObject, action: Selector) -> NSButton {
-        let button = NSButton(image: NSImage(systemSymbolName: name, accessibilityDescription: title) ?? NSImage(), target: target, action: action)
-        button.toolTip = title; button.bezelStyle = .texturedRounded
+    private func icon(_ name: String, _ title: String, target: AnyObject, action: Selector, minimumWidth: CGFloat = 28) -> NSButton {
+        let button = EditorIconButton(image: CaptureIcons.toolbar(name) ?? NSImage(systemSymbolName: name, accessibilityDescription: title) ?? NSImage(), target: target, action: action)
+        button.toolTip = title; button.isBordered = false
+        button.setAccessibilityLabel(title)
+        button.imageScaling = .scaleNone
+        button.widthAnchor.constraint(greaterThanOrEqualToConstant: minimumWidth).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 28).isActive = true
         return button
     }
     private func resize(to point: CGPoint) {
@@ -476,14 +634,25 @@ extension NSAffineTransform {
         let frame = canvas.state.captureRegion ?? CGRect(x: anchor.minX, y: anchor.maxY - height, width: min(anchor.width, canvas.frame.width), height: height)
         window?.setFrame(frame, display: true)
         resizeHandles.enabled = !displayLayoutChanged && frozenCapture != nil && canvas.state.captureRegion != nil && !isLongImage
+        info.font = .systemFont(ofSize: 11, weight: .regular); info.textColor = .secondaryLabelColor
         info.stringValue = "\(canvas.state.image.width) × \(canvas.state.image.height)"
         if frozenCapture?.limitsExpansion == true { info.toolTip = "显示器组合超过快照内存上限，仅能在已冻结范围内调整。" }
+        toolbar.contentView?.layoutSubtreeIfNeeded()
         let size = toolbar.contentView!.fittingSize
         let placement = NSScreen.screens.max { left, right in
             let a = left.frame.intersection(frame), b = right.frame.intersection(frame)
             return a.width * a.height < b.width * b.height
         }?.visibleFrame ?? visibleFrame
-        toolbar.setFrame(CaptureLayout.toolbar(near: frame, size: size, within: placement), display: true)
+        if let origin = toolbarOriginOverride {
+            let bounds = NSScreen.screens.first { $0.frame.contains(origin) }?.visibleFrame ?? placement
+            let x = min(max(origin.x, bounds.minX), max(bounds.minX, bounds.maxX-size.width))
+            let y = min(max(origin.y, bounds.minY), max(bounds.minY, bounds.maxY-size.height))
+            toolbarOriginOverride = CGPoint(x: x, y: y)
+            toolbar.setFrame(CGRect(x: x, y: y, width: size.width, height: size.height), display: true)
+        } else { toolbar.setFrame(CaptureLayout.toolbar(near: frame, size: size, within: placement), display: true) }
+    }
+    func moveToolbar(to origin: CGPoint) {
+        toolbarOriginOverride = origin; layoutCapture()
     }
     override func showWindow(_ sender: Any?) {
         if backdrops.isEmpty {
@@ -502,6 +671,7 @@ extension NSAffineTransform {
         window?.makeKeyAndOrderFront(nil); toolbar.orderFrontRegardless()
     }
     override func close() {
+        EditorHoverHelp.hide()
         resizeGesture = nil
         if let displayObserver { NotificationCenter.default.removeObserver(displayObserver); self.displayObserver = nil }
         if frozenCapture != nil {
@@ -513,11 +683,24 @@ extension NSAffineTransform {
         backdrops.forEach { ($0.contentView as? EditorBackdrop)?.frozenCapture = nil; $0.orderOut(nil); $0.close() }; backdrops.removeAll()
         super.close()
     }
+    @objc private func saveEditing() {
+        toolbar.makeFirstResponder(nil); canvas.saveDocument(nil)
+    }
     @objc private func completeEditing() {
+        toolbar.makeFirstResponder(nil)
         if canvas.copyImage() { close(); dismissed?() }
     }
     @objc private func cancelEditing() { close(); dismissed?() }
     @objc private func beginScroll() { close(); requestScroll?() }
+    private func refreshStyleVisibility() {
+        let supportsStyle = canvas.tool != .crop && canvas.tool != .redact
+        styleRow.isHidden = !stylesExpanded || !supportsStyle
+        textRow.isHidden = !stylesExpanded || canvas.tool != .text || !advancedExpanded
+        textPresets.isHidden = canvas.tool != .text; advancedButton.isHidden = canvas.tool != .text
+        widthOptions.isHidden = canvas.tool == .text
+        layoutCapture()
+    }
+    func controlTextDidEndEditing(_ notification: Notification) { changeTextStyle() }
     @objc private func changeTextStyle() {
         let size = min(300, max(8, fontSizeField.doubleValue))
         let rotation = min(360, max(-360, rotationField.doubleValue))
@@ -526,14 +709,56 @@ extension NSAffineTransform {
         canvas.styleSelectedText(fontSize: size, rotation: rotation, opacity: opacity / 100)
     }
     @objc private func selectColor(_ sender: NSButton) {
+        toolbar.makeFirstResponder(nil)
         canvas.commitText(); canvas.selectedColor = AnnotationColor.allCases[sender.tag]
         if canvas.tool == .text { canvas.styleSelectedText(fontSize: canvas.textFontSize, rotation: canvas.textRotation, opacity: canvas.textOpacity) }
         for button in colorButtons { button.state = button === sender ? .on : .off; button.needsDisplay = true }
-        window?.makeFirstResponder(canvas)
+        window?.makeKeyAndOrderFront(nil); window?.makeFirstResponder(canvas)
     }
     @objc private func selectWidth(_ sender: NSSegmentedControl) {
+        toolbar.makeFirstResponder(nil)
         canvas.commitText(); canvas.strokeWidth = [1.5, 3.0, 6.0][sender.selectedSegment]
-        window?.makeFirstResponder(canvas)
+        window?.makeKeyAndOrderFront(nil); window?.makeFirstResponder(canvas)
     }
-    @objc private func selectTool(_ sender: NSSegmentedControl) { canvas.commitText(); canvas.tool = EditTool.allCases[sender.selectedSegment]; window?.makeFirstResponder(canvas) }
+    @objc private func toggleAdvanced() { toolbar.makeFirstResponder(nil); advancedExpanded.toggle(); refreshStyleVisibility() }
+    @objc private func selectTextPreset(_ sender: NSButton) {
+        toolbar.makeFirstResponder(nil)
+        canvas.styleSelectedText(fontSize: CGFloat(sender.tag), rotation: canvas.textRotation, opacity: canvas.textOpacity)
+    }
+    @objc private func pinEditing() {
+        toolbar.makeFirstResponder(nil); canvas.commitText()
+        guard let image = render(canvas.state) else { return }
+        do { try PinnedImage.show(image, near: captureRegion); close(); dismissed?() }
+        catch { showError(error) }
+    }
+    @objc private func showMore(_ sender: NSButton) {
+        EditorHoverHelp.hide()
+        let menu = NSMenu()
+        let crop = NSMenuItem(title: "裁剪（适合长图收尾）", action: #selector(selectCrop), keyEquivalent: "")
+        crop.target = self; crop.image = NSImage(systemSymbolName: "crop", accessibilityDescription: "裁剪"); menu.addItem(crop)
+        menu.popUp(positioning: nil, at: CGPoint(x: 0, y: sender.bounds.minY), in: sender)
+    }
+    @objc private func selectCrop() { chooseTool(.crop) }
+    @objc private func activateShape() {
+        chooseTool(lastShape)
+    }
+    @objc private func showShapes(_ sender: NSButton) {
+        EditorHoverHelp.hide(); shapeMenu.popUp(positioning: nil, at: CGPoint(x: 0, y: sender.bounds.minY), in: sender)
+    }
+    @objc private func selectShape(_ sender: NSMenuItem) { chooseTool(EditTool.allCases[sender.tag]) }
+    @objc private func selectToolButton(_ sender: NSButton) { chooseTool(EditTool.allCases[sender.tag]) }
+    func chooseTool(_ tool: EditTool) {
+        toolbar.makeFirstResponder(nil); canvas.commitText(); canvas.tool = tool
+        stylesExpanded = tool != .crop && tool != .redact; advancedExpanded = false
+        for button in toolButtons { button.state = EditTool.allCases[button.tag] == tool ? .on : .off; button.contentTintColor = button.state == .on ? .systemTeal : .labelColor }
+        if tool == .rectangle || tool == .ellipse {
+            lastShape = tool
+            shapeButton?.image = CaptureIcons.toolbar(tool == .ellipse ? "circle" : "rectangle")
+        }
+        shapeGroup.selected = tool == .rectangle || tool == .ellipse
+        shapeButton?.state = shapeGroup.selected ? .on : .off
+        shapeButton?.contentTintColor = tool == .rectangle || tool == .ellipse ? .systemTeal : .labelColor
+        for item in shapeMenu.items { item.state = EditTool.allCases[item.tag] == lastShape ? .on : .off }
+        refreshStyleVisibility(); window?.makeKeyAndOrderFront(nil); window?.makeFirstResponder(canvas)
+    }
 }

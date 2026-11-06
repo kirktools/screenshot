@@ -5,6 +5,12 @@ import StitchCore
 /// 不读取桌面、不申请权限：验证平台渲染、拼接方向和实际导出像素。
 @MainActor func runSelfTest() async throws {
     guard localized("capture.normal") != "capture.normal" else { throw CaptureError.message("运行位置的语言资源未加载") }
+    try await runEditorControlsSelfTest()
+    try runLongImageBudgetSelfTest()
+    try runNewTextDefaultsSelfTest()
+    try runEditorLayoutSelfTest()
+    try runToolbarInputSelfTest()
+    try runTextTransformSelfTest()
     try runTextObjectSelfTest()
     try runSelectionSelfTest()
     try await runFrozenSelectionSelfTest()
@@ -70,13 +76,12 @@ import StitchCore
     try require(!overlay.diagnosticGeometry.scrolling && overlay.diagnosticGeometry.elasticity == .none, "普通截图仍允许滚动或弹性回弹")
     let toolbarViews = overlay.diagnosticToolbarViews
     guard let blue = toolbarViews.compactMap({ $0 as? NSButton }).first(where: { $0.toolTip == "蓝色" }),
-          let widths = toolbarViews.compactMap({ $0 as? NSSegmentedControl }).first(where: { $0.label(forSegment: 0) == "细" }),
-          let shapes = toolbarViews.compactMap({ $0 as? NSSegmentedControl }).first(where: { $0.segmentCount == EditTool.allCases.count }) else {
+          let widths = toolbarViews.compactMap({ $0 as? NSSegmentedControl }).first(where: { $0.toolTip(forSegment: 0) == "细" }) else {
         throw CaptureError.message("工具栏缺少颜色、线宽或形状选择")
     }
     blue.performClick(nil)
     widths.selectedSegment = 2; _ = widths.sendAction(widths.action, to: widths.target)
-    shapes.selectedSegment = EditTool.allCases.firstIndex(of: .ellipse)!; _ = shapes.sendAction(shapes.action, to: shapes.target)
+    overlay.shapeMenu.performActionForItem(at: 1)
     try require(overlay.canvas.selectedColor == .blue && overlay.canvas.strokeWidth == 6 && overlay.canvas.tool == .ellipse, "样式控件未改变当前画笔")
     let circle = Annotation(tool: .ellipse, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 100, y: 120), color: .blue, lineWidth: 8)
     overlay.canvas.apply(circle)
@@ -356,4 +361,189 @@ import StitchCore
     let a = canvas.state.annotations[0]
     try require(a.containsText(a.start))
     try require(!a.containsText(CGPoint(x: 290, y: 190)))
+}
+
+/// 真正创建 AppKit 字段编辑器，覆盖“能渲染但无法键盘输入”的回归。
+@MainActor private func runToolbarInputSelfTest() throws {
+    func require(_ value: Bool, _ message: String) throws { if !value { throw CaptureError.message(message) } }
+    let ctx = CGContext(data: nil, width: 400, height: 240, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    let editor = EditorController(image: ctx.makeImage()!, region: CGRect(x: 100, y: 200, width: 400, height: 240))
+    editor.showWindow(nil); defer { editor.close() }
+    let screen = editor.window!.screen!.visibleFrame
+    editor.moveToolbar(to: CGPoint(x: screen.minX+30, y: screen.minY+40))
+    let moved = editor.diagnosticGeometry.toolbar.origin
+    editor.chooseTool(.text)
+    try require(editor.diagnosticGeometry.toolbar.origin == moved, "切换工具后工具栏拖动位置丢失")
+    editor.moveToolbar(to: CGPoint(x: screen.minX-1000, y: screen.minY-1000))
+    try require(screen.contains(editor.diagnosticGeometry.toolbar), "拖动工具栏可移出可见屏幕")
+    editor.chooseTool(.redact)
+    let collapsedHeight = editor.diagnosticGeometry.toolbar.height
+    let views = editor.diagnosticToolbarViews
+    let textButton = views.compactMap { $0 as? NSButton }.first { $0.toolTip == "文字" }!
+    textButton.performClick(nil)
+    let advanced = views.compactMap { $0 as? NSButton }.first { $0.toolTip == "精确调整字号、旋转和不透明度" }!
+    advanced.performClick(nil)
+    try require(editor.diagnosticGeometry.toolbar.height > collapsedHeight, "文字样式未按需展开")
+    editor.canvas.apply(Annotation(tool: .text, start: CGPoint(x: 20, y: 20), end: .zero, text: "Test"))
+    editor.canvas.selectText(at: CGPoint(x: 22, y: 22))
+    for (name, value) in [("字号", "48"), ("旋转°", "30"), ("不透明度%", "40")] {
+        let field = views.compactMap { $0 as? NSTextField }.first { $0.identifier?.rawValue == name }!
+        guard let panel = field.window else { throw CaptureError.message("参数输入框没有窗口") }
+        try require(panel.canBecomeKey, "编辑工具栏不能接受键盘焦点")
+        panel.makeKeyAndOrderFront(nil); field.selectText(nil)
+        guard let input = field.currentEditor() as? NSTextView else { throw CaptureError.message("参数输入框无法创建实际字段编辑器") }
+        input.insertText(value, replacementRange: NSRange(location: 0, length: input.string.utf16.count))
+        panel.makeFirstResponder(nil)
+    }
+    let a = editor.canvas.state.annotations[0]
+    try require(a.fontSize == 48 && a.rotation == 30 && abs(a.opacity - 0.4) < 0.001, "字段失焦未应用字号、旋转或不透明度")
+    editor.chooseTool(.redact)
+    try require(editor.diagnosticGeometry.toolbar.height == collapsedHeight, "收起样式后工具栏未恢复单行")
+}
+
+@MainActor private func runTextTransformSelfTest() throws {
+    func require(_ value: Bool, _ message: String) throws { if !value { throw CaptureError.message(message) } }
+    let ctx = CGContext(data: nil, width: 1000, height: 600, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    let canvas = EditorCanvas(image: ctx.makeImage()!); canvas.tool = .text
+    let a = Annotation(tool: .text, start: CGPoint(x: 300, y: 240), end: .zero, text: "Text", fontSize: 28, rotation: 35)
+    let pivot = a.textPoint(CGPoint(x: a.textSize.width/2, y: a.textSize.height/2))
+    for zoom: CGFloat in [0.5, 1] {
+        canvas.state.annotations = [a]; canvas.zoom = zoom
+        canvas.selectText(at: a.textPoint(CGPoint(x: 3, y: 3)))
+        let handle = a.textHandlePoints(zoom: zoom)[3]
+        try require(canvas.beginTextTransform(at: handle), "缩放角点没有命中")
+        let target = CGPoint(x: pivot.x + 2*(handle.x-pivot.x), y: pivot.y + 2*(handle.y-pivot.y))
+        canvas.updateTextTransform(at: target); canvas.updateTextTransform(at: target); canvas.endTextTransform()
+        let scaled = canvas.state.annotations[0]
+        let center = scaled.textPoint(CGPoint(x: scaled.textSize.width/2, y: scaled.textSize.height/2))
+        try require(abs(scaled.fontSize-56) < 0.001 && hypot(center.x-pivot.x, center.y-pivot.y) < 0.001, "文字缩放发生中心漂移")
+        canvas.undo(nil); try require(canvas.state.annotations[0].fontSize == 28, "一次拖动未能一次撤销")
+        canvas.redo(nil); try require(abs(canvas.state.annotations[0].fontSize-56) < 0.001, "缩放重做失败")
+        canvas.state.annotations = [a]; canvas.zoom = zoom; canvas.selectText(at: a.textPoint(CGPoint(x: 3, y: 3)))
+        let rotate = a.textHandlePoints(zoom: zoom)[4]
+        try require(canvas.beginTextTransform(at: rotate), "旋转手柄没有命中")
+        let turned = CGPoint(x: pivot.x-(rotate.y-pivot.y), y: pivot.y+(rotate.x-pivot.x))
+        canvas.updateTextTransform(at: turned); canvas.endTextTransform()
+        try require(abs(canvas.state.annotations[0].rotation-125) < 0.001, "旋转手柄角度错误")
+        canvas.selectText(at: canvas.state.annotations[0].start)
+        let previous = canvas.state.annotations[0]
+        let cancelHandle = previous.textHandlePoints(zoom: zoom)[3]
+        try require(canvas.beginTextTransform(at: cancelHandle), "旋转后缩放手柄未命中")
+        canvas.updateTextTransform(at: CGPoint(x: cancelHandle.x+80, y: cancelHandle.y+80)); canvas.endTextTransform(cancel: true)
+        try require(canvas.state.annotations[0].fontSize == previous.fontSize, "取消手势未恢复原文字")
+    }
+}
+
+@MainActor private func runEditorControlsSelfTest() async throws {
+    func require(_ value: Bool, _ message: String) throws { if !value { throw CaptureError.message(message) } }
+    let ctx = CGContext(data: nil, width: 320, height: 200, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.setFillColor(NSColor.white.cgColor); ctx.fill(CGRect(x: 0, y: 0, width: 320, height: 200))
+    let image = ctx.makeImage()!
+    let editor = EditorController(image: image, region: CGRect(x: 100, y: 200, width: 320, height: 200))
+    editor.showWindow(nil); defer { editor.close(); EditorHoverHelp.hide() }
+    let buttons = editor.diagnosticToolbarViews.compactMap { $0 as? EditorIconButton }
+    guard let shape = buttons.first(where: { $0.toolTip == "矩形 / 圆形" }), let pin = buttons.first(where: { $0.toolTip == "钉到屏幕" }) else { throw CaptureError.message("形状或贴图图标缺失") }
+    try require(shape.image != nil && !shape.isBordered, "形状按钮丢失图片或仍有外框")
+    guard let group = shape.superview as? EditorShapeGroup,
+          let dropdown = group.arrangedSubviews.last as? NSButton else { throw CaptureError.message("形状下拉没有组成单个控件") }
+    try require(group.spacing == 0 && dropdown.frame.width <= 14.5, "形状箭头仍占用独立工具的宽度")
+    try require(abs(dropdown.frame.minX - shape.frame.maxX) <= 1, "形状与下拉箭头存在工具间距")
+    editor.chooseTool(.rectangle)
+    try require(group.selected, "形状两部分未共享选中状态")
+    for button in buttons {
+        if let image = button.image {
+            try require(image.size == NSSize(width: 24, height: 24) && image.isTemplate, "工具栏混入不同尺寸或非单色图标")
+        }
+    }
+    try require(CaptureIcons.scrollCapture.size == NSSize(width: 24, height: 24), "长截图图标未复用统一尺寸")
+    EditorHoverHelp.show(for: shape)
+    try await Task.sleep(for: .milliseconds(500))
+    try require(EditorHoverHelp.diagnosticWindow?.isVisible == true, "浮层悬停提示不可见")
+    try require(EditorHoverHelp.diagnosticWindow!.level.rawValue > shape.window!.level.rawValue, "悬停提示被工具栏遮住")
+    EditorHoverHelp.hide()
+    try require(EditorHoverHelp.diagnosticWindow?.isVisible == false, "悬停提示未隐藏")
+    pin.performClick(nil)
+    guard let pinned = PinnedImage.diagnosticWindows.first else { throw CaptureError.message("钉到屏幕没有生成贴图") }
+    try require(pinned.isVisible && pinned.level == .floating, "贴图未置顶")
+    try require(pinned.styleMask.contains(.resizable) && pinned.styleMask.contains(.closable), "贴图不能缩放或关闭")
+    try require(pinned.contentView is PinnedImageView && pinned.isMovableByWindowBackground, "贴图未提供拖动行为")
+    pinned.close()
+    try require(PinnedImage.diagnosticWindows.isEmpty, "关闭贴图未释放管理引用")
+}
+
+@MainActor private func runEditorLayoutSelfTest() throws {
+    func require(_ value: Bool, _ message: String) throws { if !value { throw CaptureError.message(message) } }
+    let ctx = CGContext(data: nil, width: 800, height: 360, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    let canvas = EditorCanvas(image: ctx.makeImage()!)
+    canvas.setFrameSize(NSSize(width: 400, height: 180)); canvas.zoom = 0.5
+    for size: CGFloat in [28, 100, 300] {
+        canvas.textFontSize = size
+        let field = NSTextField(); field.stringValue = "文字 Test"
+        canvas.configureTextInput(field, at: CGPoint(x: 790, y: 350))
+        try require(canvas.bounds.contains(field.frame), "靠近选区边缘的文字输入框被裁掉")
+        let font = field.font!
+        try require(field.bounds.height >= ceil(font.ascender - font.descender + font.leading) + 8, "大字号输入框高度不足")
+        try require(field.placeholderAttributedString != nil, "输入提示未使用独立的小字号")
+    }
+    let editor = EditorController(image: ctx.makeImage()!, region: CGRect(x: 100, y: 200, width: 400, height: 180))
+    editor.showWindow(nil); defer { editor.close() }
+    let views = editor.diagnosticToolbarViews
+    let main = views.first { $0.identifier?.rawValue == "editor.main" }!
+    let styles = views.first { $0.identifier?.rawValue == "editor.styles" }!
+    for tool in [EditTool.text, .rectangle, .arrow, .ellipse, .text] {
+        editor.chooseTool(tool)
+        styles.window?.contentView?.layoutSubtreeIfNeeded()
+        let a = main.convert(main.bounds, to: nil), b = styles.convert(styles.bounds, to: nil)
+        try require(abs(a.minX - b.minX) <= 1 && abs(a.maxX - b.maxX) <= 1, "二级菜单没有稳定占满主工具栏宽度")
+        let left = views.first { $0.identifier?.rawValue == "editor.styles.left" }!
+        let right = views.first { $0.identifier?.rawValue == "editor.styles.right" }!
+        let l = left.convert(left.bounds, to: nil), r = right.convert(right.bounds, to: nil)
+        try require(abs(l.minX-a.minX) <= 1 && abs(r.maxX-a.maxX) <= 1, "切换工具后左右分组发生漂移")
+        try require((styles as! NSStackView).distribution == .fill, "二级菜单仍使用分散布局")
+    }
+}
+
+@MainActor private func runNewTextDefaultsSelfTest() throws {
+    func require(_ value: Bool, _ message: String) throws { if !value { throw CaptureError.message(message) } }
+    let ctx = CGContext(data: nil, width: 800, height: 400, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    let canvas = EditorCanvas(image: ctx.makeImage()!); canvas.setFrameSize(NSSize(width: 800, height: 400))
+    let a = Annotation(tool: .text, start: CGPoint(x: 200, y: 160), end: .zero, text: "Test")
+    canvas.state.annotations = [a]; canvas.selectText(at: CGPoint(x: 202, y: 162))
+    let handle = a.textHandlePoints(zoom: 1)[3]
+    let center = a.textPoint(CGPoint(x: a.textSize.width/2, y: a.textSize.height/2))
+    try require(canvas.beginTextTransform(at: handle), "未命中放大手柄")
+    canvas.updateTextTransform(at: CGPoint(x: center.x+3*(handle.x-center.x), y: center.y+3*(handle.y-center.y)))
+    canvas.endTextTransform()
+    try require(canvas.textFontSize > 80, "现有文字未放大")
+    canvas.selectText(at: CGPoint(x: 10, y: 10))
+    try require(canvas.selectedText == nil && canvas.textFontSize == 28 && canvas.textRotation == 0, "新文字继承了对象拖动后的样式")
+    let field = NSTextField()
+    canvas.configureTextInput(field, at: CGPoint(x: 600, y: 300))
+    try require(field.frame.height <= 32 && field.font!.pointSize <= 13, "空输入框与提示大小不匹配")
+    canvas.textFontSize = 200
+    canvas.configureTextInput(field, at: CGPoint(x: 600, y: 300))
+    try require(field.frame.height <= 32, "空输入框随大字号膨胀")
+    field.stringValue = "Text"
+    canvas.configureTextInput(field, at: CGPoint(x: 600, y: 300))
+    try require(field.frame.height > 100, "输入内容后未适配大字号")
+    field.stringValue = ""; canvas.configureTextInput(field, at: CGPoint(x: 600, y: 300))
+    try require(field.frame.height <= 32, "清空输入后未收回提示尺寸")
+}
+
+@MainActor private func runLongImageBudgetSelfTest() throws {
+    func require(_ value: Bool, _ message: String) throws { if !value { throw CaptureError.message(message) } }
+    let small = LongCaptureLimits(physicalMemory: 4*1024*1024*1024)
+    let large = LongCaptureLimits(physicalMemory: 16*1024*1024*1024)
+    try require(large.pixels > small.pixels && large.retainedBytes > small.retainedBytes, "长图预算未按内存适配")
+    try require(!large.accepts(width: Int.max, height: 100), "长图像素乘法溢出未拒绝")
+    let width = 64, height = 36_000
+    try require(small.accepts(width: width, height: height), "窄长图仍被固定高度截断")
+    let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.setFillColor(NSColor.red.cgColor); ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    let image = ctx.makeImage()!
+    let piece = StitchPiece(image: image, addedRows: height, frame: image.grayFrame())
+    guard let result = compose([piece]) else { throw CaptureError.message("超过三万像素的长图无法合成") }
+    let png = try result.png()
+    guard let source = CGImageSourceCreateWithData(png as CFData, nil), let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw CaptureError.message("超长 PNG 编码或解码失败") }
+    try require(decoded.height == height && decoded.width == width, "超长 PNG 被截断或缩小")
 }
