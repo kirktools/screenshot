@@ -1,46 +1,52 @@
 # Screenshot
 
-[简体中文](README.md)
+A lightweight, native macOS capture tool. **One selection for screenshots, scrolling captures, and GIFs.**
 
-A lightweight, native macOS screenshot tool. Capture a region, scroll to stitch a long image, and press Return to copy—without opening WeChat.
+[Website](https://kirktools.github.io/screenshot/) · [Download](https://github.com/kirktools/screenshot/releases/latest) · [简体中文](README.md)
 
-[Download the latest release](https://github.com/kirktools/screenshot/releases/latest)
+![Native in-place editing and icon toolbar](docs/images/editor.png)
 
-![Native in-place editing](docs/images/editor.png)
-
-- **Scrolling screenshots:** scroll downward manually; overlapping content is matched and stitched automatically.
-- **In-place annotation:** arrows, rectangles, ellipses, text, crop, and redaction.
-- **Quick capture:** lives in the menu bar, with configurable global shortcuts.
-- **Local processing:** no account, no screenshot uploads. Copy the final image or save a PNG.
+- **Region capture:** hover to select a window, drag a region, adjust its edges, and annotate in place.
+- **Scrolling screenshots:** scroll up or down manually; automatic overlap matching and deduplication. Stable top/bottom bars appear once. Preview, undo, and recovery are available.
+- **GIF recording:** reuse the selected region, start/stop manually, preview, and save.
+- **Editable text:** move and re-edit text, drag corners to scale, use the rotation handle, or enter precise size, angle, and opacity. Arrows, shapes, solid redaction, crop, and undo/redo remain available.
+- **Pinned references:** keep the rendered image above other windows, move or resize it. The capture toolbar can be moved too.
+- **Local processing:** no account or screenshot uploads. Copy/save PNGs, check for updates, and optionally enable local timing diagnostics in Settings.
 
 ## Use
 
-1. Press **⌘⇧2** for a region or **⌘⇧7** for scrolling capture. Shortcuts can be changed in Settings; system conflicts may require a different combination.
-2. Select a region. For a long capture, select the scrollable content and scroll down in the original app.
-3. Press **Return** to copy and finish, or **Esc** to cancel. Choose the pencil to edit a long image or the download button to save it.
+1. Press **⌘⇧2** and select a region or window.
+2. Annotate directly, or choose scrolling capture, GIF recording, or pinning from the toolbar.
+3. **Return / ✓** copies and finishes a screenshot; **Esc / ×** cancels. Stop a GIF to preview and save it.
 
-![16-second feature demo](docs/images/screenshot-intro.gif)
+Disable the separate scrolling shortcut in Settings to use only one global shortcut, or keep **⌘⇧7** for direct scrolling capture. Shortcuts are configurable.
 
-[MP4 version](docs/images/screenshot-intro.mp4) · Native UI with synthetic content, driven by a script rather than a recording of mouse interactions.
+![16-second basic workflow demo](docs/images/screenshot-intro.gif)
+
+[MP4](docs/images/screenshot-intro.mp4) · Native UI and synthetic content, script-driven rather than a recording of mouse interactions.
 
 ## Install
 
-Requires **macOS 14+**, Apple Silicon or Intel. Download the DMG from Releases and drag Screenshot into Applications. Screen Recording permission is required; Accessibility and microphone permissions are not.
+Requires **macOS 14+**, Apple Silicon or Intel. Download the DMG and drag Screenshot into Applications. Screen Recording permission is required; Accessibility and microphone permissions are not.
 
-Current releases are not Apple Developer ID signed or notarized. macOS may block a download; verify its source and follow the system's prompts. Do not disable Gatekeeper or SIP. See the [installation guide](docs/USAGE.md#安装与权限) and [signing notes](docs/SIGNING.md).
+Current releases are not Apple Developer ID signed or notarized. Verify the download source and follow macOS prompts; do not disable Gatekeeper or SIP. See the [installation guide](docs/USAGE.md#安装与权限).
 
-For local development, run `make dev` (Swift 6+, Command Line Tools, Python 3). This installs a separate **Screenshot Dev** with independent settings and permissions; it does not replace the daily app.
+For development or PR testing (Swift 6+, Command Line Tools, Python 3):
+
+```sh
+make dev
+```
+
+This updates a separate **Screenshot Dev**, with independent permissions and settings and default shortcuts **⌃⌥2 / ⌃⌥7**. It does not replace the daily app. This README describes current source capabilities; available downloads follow their [release notes](https://github.com/kirktools/screenshot/releases/latest).
 
 ## Limits and privacy
 
-Scrolling capture works best with static content. Fixed headers, floating elements, animations, dynamic messages, repeated patterns, and fast jumps can prevent a reliable match. Upward extension and scrolling capture across displays are not supported. When matching fails, the app offers recovery or undo instead of silently assuming a correct result.
+Scrolling capture works best with static, vertically scrolling content. Stable bars near the top/bottom can be separated; central overlays, animations, dynamic messages, reflow, repeated patterns, and fast jumps may prevent a reliable match. Horizontal and cross-display scrolling captures are unsupported. There is no fixed height limit, but memory and pixel budgets still apply.
 
-All image processing happens locally. GitHub is contacted when you explicitly check for or download an update. See [Privacy](docs/PRIVACY.md).
-
-The documentation images and animation use generated example content, not private conversations.
+GIF recording is limited to 60 seconds, up to 10 fps and 1280 pixels on the longest edge; no audio or cursor capture. All image processing is local. GitHub is contacted for explicit update checks/downloads. Timing diagnostics are local and optional. See [Privacy](docs/PRIVACY.md) and [Usage](docs/USAGE.md).
 
 ## Contribute
 
-Bug reports and pull requests are welcome. Include the system version and reproduction steps, and use non-sensitive screenshots. See [Contributing](CONTRIBUTING.md), [Architecture](docs/ARCHITECTURE.md), and [Security](SECURITY.md).
+Issues and PRs are welcome. Include your system version, reproduction steps, and non-sensitive examples. See [Contributing](CONTRIBUTING.md), [Architecture](docs/ARCHITECTURE.md), and [Security](SECURITY.md).
 
 [MIT](LICENSE) · Copyright © 2026 kirktools
