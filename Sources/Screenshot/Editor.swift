@@ -110,7 +110,7 @@ struct EditState {
 
 @MainActor final class EditorCanvas: NSView, NSTextFieldDelegate {
     var state: EditState
-    var tool: EditTool = .arrow
+    var tool: EditTool = .rectangle
     var selectedColor: AnnotationColor = .red
     var strokeWidth: CGFloat = 3
     private var newTextFontSize: CGFloat = 28
@@ -481,6 +481,7 @@ final class EditorToolbarPanel: NSPanel {
             if tool == .rectangle {
                 let button = icon("rectangle", "矩形 / 圆形", target: self, action: #selector(activateShape))
                 button.setButtonType(.toggle); shapeButton = button
+                button.state = .on; button.contentTintColor = .systemTeal; shapeGroup.selected = true
                 shapeGroup.spacing = 0; shapeGroup.addArrangedSubview(button)
                 let arrow = icon("chevron.down", "选择矩形或圆形", target: self, action: #selector(showShapes(_:)), minimumWidth: 14)
                 arrow.widthAnchor.constraint(equalToConstant: 14).isActive = true
@@ -496,7 +497,7 @@ final class EditorToolbarPanel: NSPanel {
                 let button = icon(symbols[tool]!, tool == .redact ? "打码（实心遮挡）" : tool.rawValue, target: self, action: #selector(selectToolButton(_:)))
 
                 button.tag = EditTool.allCases.firstIndex(of: tool)!; button.setButtonType(.toggle)
-                button.state = tool == .arrow ? .on : .off; button.contentTintColor = tool == .arrow ? .systemTeal : .labelColor; toolButtons.append(button); tools.addArrangedSubview(button)
+                button.state = .off; button.contentTintColor = .labelColor; toolButtons.append(button); tools.addArrangedSubview(button)
             }
         }
         let undo = icon("arrow.uturn.backward", "撤销 ⌘Z", target: canvas, action: #selector(EditorCanvas.undo(_:)))

@@ -60,9 +60,12 @@ final class EditorBackdrop: NSView {
 }
 
 @MainActor func captureToolbar(views: [NSView]) -> NSView {
-    let material = NSVisualEffectView()
-    material.material = .hudWindow; material.blendingMode = .behindWindow; material.state = .active
-    material.wantsLayer = true; material.layer?.cornerRadius = 12; material.layer?.masksToBounds = true
+    // 标注色块必须与导出颜色一致，不能参与毛玻璃的 vibrancy 混色。
+    let material = NSView()
+    material.appearance = NSAppearance(named: .darkAqua)
+    material.wantsLayer = true
+    material.layer?.backgroundColor = NSColor(srgbRed: 0.12, green: 0.12, blue: 0.12, alpha: 1).cgColor
+    material.layer?.cornerRadius = 12; material.layer?.masksToBounds = true
     let row = NSStackView(views: views); row.spacing = 8; row.alignment = .centerY
     row.translatesAutoresizingMaskIntoConstraints = false; material.addSubview(row)
     NSLayoutConstraint.activate([row.leadingAnchor.constraint(equalTo: material.leadingAnchor, constant: 12), row.trailingAnchor.constraint(equalTo: material.trailingAnchor, constant: -12), row.topAnchor.constraint(equalTo: material.topAnchor, constant: 10), row.bottomAnchor.constraint(equalTo: material.bottomAnchor, constant: -10)])

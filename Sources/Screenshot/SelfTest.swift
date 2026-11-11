@@ -327,6 +327,12 @@ import StitchCore
     let ctx = CGContext(data: nil, width: 400, height: 240, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
     let editor = EditorController(image: ctx.makeImage()!, region: CGRect(x: 100, y: 200, width: 400, height: 240))
     editor.showWindow(nil); defer { editor.close() }
+    try require(editor.canvas.tool == .rectangle, "新截图应默认矩形，不能默认箭头")
+    let shape = editor.diagnosticToolbarViews.compactMap { $0 as? NSButton }.first { $0.toolTip == "矩形 / 圆形" }
+    try require(shape?.state == .on, "默认矩形按钮与画布工具不一致")
+    let palette = captureToolbar(views: [])
+    try require(!(palette is NSVisualEffectView), "工具栏不能对标注色块应用 vibrancy 混色")
+    try require(palette.layer?.backgroundColor?.alpha == 1, "工具栏底色必须不透明，避免随截图背景改变")
     let screen = editor.window!.screen!.visibleFrame
     editor.moveToolbar(to: CGPoint(x: screen.minX+30, y: screen.minY+40))
     let moved = editor.diagnosticGeometry.toolbar.origin
