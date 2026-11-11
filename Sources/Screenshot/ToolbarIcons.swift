@@ -4,7 +4,7 @@ extension CaptureIcons {
     /// 截图工具栏统一使用 24 pt 画布、1.8 pt 圆角描边与单色模板。
     /// 避免系统符号的字形度量与自绘图标混排产生尺寸和视觉重量差异。
     static func toolbar(_ name: String) -> NSImage? {
-        let supported = ["rectangle", "circle", "arrow.up.right", "textbox", "square.grid.3x3.fill", "arrow.uturn.backward", "arrow.uturn.forward", "square.and.arrow.down", "pin", "xmark", "checkmark", "ellipsis", "chevron.down", "arrow.up.and.down", "crop", "video"]
+        let supported = ["rectangle", "circle", "arrow.up.right", "textbox", "square.grid.3x3.fill", "arrow.uturn.backward", "arrow.uturn.forward", "square.and.arrow.down", "pin", "xmark", "checkmark", "ellipsis", "chevron.down", "arrow.up.and.down", "crop", "gif"]
         guard supported.contains(name) else { return nil }
         let image = NSImage(size: NSSize(width: 24, height: 24), flipped: false) { _ in
             NSColor.black.setStroke(); NSColor.black.setFill()
@@ -66,9 +66,15 @@ extension CaptureIcons {
                 path([CGPoint(x: 12, y: 6), CGPoint(x: 12, y: 18)])
                 path([CGPoint(x: 9, y: 15), CGPoint(x: 12, y: 18), CGPoint(x: 15, y: 15)])
                 path([CGPoint(x: 9, y: 9), CGPoint(x: 12, y: 6), CGPoint(x: 15, y: 9)])
-            case "video":
-                roundedRect(CGRect(x: 3, y: 6, width: 13, height: 12))
-                path([CGPoint(x: 16, y: 14), CGPoint(x: 21, y: 18), CGPoint(x: 21, y: 6), CGPoint(x: 16, y: 10)])
+            case "gif":
+                roundedRect(CGRect(x: 1.5, y: 4, width: 21, height: 16))
+                // 与其他工具共享模板着色；文字直接说明格式，避免摄像机图标的歧义。
+                let label = "GIF" as NSString
+                let attributes: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.systemFont(ofSize: 9, weight: .bold), .foregroundColor: NSColor.black
+                ]
+                let size = label.size(withAttributes: attributes)
+                label.draw(at: CGPoint(x: (24-size.width)/2, y: (24-size.height)/2), withAttributes: attributes)
             case "crop":
                 path([CGPoint(x: 7, y: 22), CGPoint(x: 7, y: 7), CGPoint(x: 22, y: 7)])
                 path([CGPoint(x: 2, y: 17), CGPoint(x: 17, y: 17), CGPoint(x: 17, y: 2)])

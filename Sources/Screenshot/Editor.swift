@@ -521,7 +521,7 @@ final class EditorToolbarPanel: NSPanel {
             let button = icon("arrow.up.and.down", "滚动长截图（重新采集选区）", target: self, action: #selector(beginScroll))
             button.image = CaptureIcons.toolbar("arrow.up.and.down")
             controls.append(button)
-            controls.append(icon("video", "录制 GIF（使用当前选区，不包含标注）", target: self, action: #selector(beginGIF)))
+            controls.append(icon("gif", "录制 GIF（使用当前选区，不包含标注）", target: self, action: #selector(beginGIF)))
         }
         let pin = icon("pin", "钉到屏幕", target: self, action: #selector(pinEditing))
         let more = icon("ellipsis", "更多：裁剪", target: self, action: #selector(showMore(_:)))
