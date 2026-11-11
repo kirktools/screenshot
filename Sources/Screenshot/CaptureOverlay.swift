@@ -46,7 +46,7 @@ final class EditorCaptureWindow: NSWindow {
 }
 
 final class EditorBackdrop: NSView {
-    var cancel: (() -> Void)?
+    var clicked: (() -> Void)?
     var frozenCapture: FrozenCapture?
     override func draw(_ dirtyRect: NSRect) {
         if let screenFrame = window?.frame {
@@ -56,7 +56,7 @@ final class EditorBackdrop: NSView {
         }
         NSColor.black.withAlphaComponent(0.32).setFill(); bounds.fill()
     }
-    override func mouseDown(with event: NSEvent) { NSSound.beep() }
+    override func mouseDown(with event: NSEvent) { clicked?() }
 }
 
 @MainActor func captureToolbar(views: [NSView]) -> NSView {

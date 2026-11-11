@@ -661,10 +661,15 @@ final class EditorToolbarPanel: NSPanel {
         if backdrops.isEmpty {
             for screen in NSScreen.screens {
                 let backdrop = NSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-                backdrop.level = .screenSaver; backdrop.backgroundColor = .clear; backdrop.isOpaque = false; backdrop.hasShadow = false
+                // 点击遮罩可能改变同级窗口前后顺序；遮罩必须始终低于编辑选区。
+                backdrop.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue - 1); backdrop.backgroundColor = .clear; backdrop.isOpaque = false; backdrop.hasShadow = false
                 backdrop.isReleasedWhenClosed = false; backdrop.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
                 let background = EditorBackdrop(frame: CGRect(origin: .zero, size: screen.frame.size))
                 background.frozenCapture = frozenCapture
+                background.clicked = { [weak self] in
+                    self?.window?.makeKeyAndOrderFront(nil)
+                    self?.toolbar.orderFrontRegardless()
+                }
                 backdrop.contentView = background
                 backdrops.append(backdrop)
             }

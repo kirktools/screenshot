@@ -64,6 +64,20 @@ import StitchCore
     let overlay = EditorController(image: a, region: selection, allowScroll: true)
     overlay.showWindow(nil)
     try require(overlay.diagnosticGeometry.image == selection, "普通截图没有保留原选区位置")
+    let shields = NSApp.windows.filter { $0.contentView is EditorBackdrop && $0.isVisible }
+    try require(!shields.isEmpty, "截图遮罩未创建")
+    overlay.canvas.apply(Annotation(tool: .rectangle, start: .zero, end: CGPoint(x: 10, y: 10)))
+    for shield in shields {
+        // 模拟点击外部导致的窗口前移，不能遮住选区或丢失编辑状态。
+        shield.orderFrontRegardless()
+        try require(shield.level.rawValue < overlay.window!.level.rawValue, "点击外部可使同级遮罩盖住截图选区")
+        let event = NSEvent.mouseEvent(with: .leftMouseDown, location: CGPoint(x: 5, y: 5), modifierFlags: [], timestamp: 0, windowNumber: shield.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+        shield.contentView!.mouseDown(with: event)
+        try require(overlay.window!.isVisible && overlay.window!.isKeyWindow && overlay.diagnosticGeometry.toolbarVisible, "点击外部后未恢复截图编辑焦点")
+        try require(overlay.diagnosticGeometry.image == selection && overlay.canvas.state.annotations.count == 1, "点击外部丢失选区或标注")
+    }
+    overlay.canvas.undo(nil)
+
     if let directory = ProcessInfo.processInfo.environment["SCREENSHOT_SELFTEST_DIR"],
        let view = overlay.diagnosticToolbarViews.first,
        let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
