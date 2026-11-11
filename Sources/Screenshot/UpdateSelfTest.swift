@@ -57,6 +57,22 @@ func makeUpdateFixture(in root: URL) throws -> URL {
     try stable.requireCompatible(expected: version, currentTeam: nil, currentCertificate: "fixture-certificate-a")
     try rejects("自签名更新更换证书仍接受") { try stable.requireCompatible(expected: version, currentTeam: nil, currentCertificate: "fixture-certificate-b") }
     try rejects("自签名更新降级为 ad-hoc 仍接受") { try candidate.requireCompatible(expected: version, currentTeam: nil, currentCertificate: "fixture-certificate-a") }
+    try updateRequire(stable.continuesPublisher(of: stable), "同证书更新未识别为身份延续")
+    try updateRequire(!candidate.continuesPublisher(of: candidate), "ad-hoc 错误获得固定身份待遇")
+    let other = UpdateBundle(version: version, minimumOS: os, team: nil, certificate: "fixture-certificate-b")
+    try updateRequire(!other.continuesPublisher(of: stable), "不同证书错误获得身份延续待遇")
+    let teamChanged = UpdateBundle(version: version, minimumOS: os, team: "OTHERTEAM", certificate: stable.certificate)
+    try updateRequire(!teamChanged.continuesPublisher(of: stable), "不同 Team 获得身份延续待遇")
+    let reviewFile = root.appendingPathComponent("review-fixture")
+    try Data().write(to: reviewFile)
+    try stable.applyDownloadReview(to: reviewFile, current: stable)
+    let reviewAttributes = try UpdateCommand.run("/usr/bin/xattr", [reviewFile.path])
+    try updateRequire(!String(decoding: reviewAttributes, as: UTF8.self).contains("com.apple.quarantine"), "同证书更新仍主动新增隔离标记")
+    let reviewMarker = "0083;12345678;Fixture;"
+    _ = try UpdateCommand.run("/usr/bin/xattr", ["-w", "com.apple.quarantine", reviewMarker, reviewFile.path])
+    try stable.applyDownloadReview(to: reviewFile, current: stable)
+    let preserved = try UpdateCommand.run("/usr/bin/xattr", ["-p", "com.apple.quarantine", reviewFile.path])
+    try updateRequire(String(decoding: preserved, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == reviewMarker, "同证书更新移除了已有系统隔离标记")
     let archive = root.appendingPathComponent("good.zip")
     _ = try UpdateCommand.run("/usr/bin/ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", source.path, archive.path])
     let zip = try Data(contentsOf: archive)

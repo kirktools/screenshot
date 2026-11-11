@@ -48,6 +48,17 @@ struct UpdateBundle {
         guard hasResources else { throw UpdateError("更新应用缺少语言资源包。") }
         return UpdateBundle(version: version, minimumOS: minimumOS, team: team, certificate: certificate)
     }
+    /// 仅供已通过 inspect / requireCompatible 的更新包使用。
+    /// 固定证书可把当前用户信任的安装与新版关联；ad-hoc 不具备稳定发布者身份。
+    func continuesPublisher(of current: UpdateBundle) -> Bool {
+        guard let certificate = current.certificate, !certificate.isEmpty else { return false }
+        return self.certificate == certificate && team == current.team
+    }
+    func applyDownloadReview(to app: URL, current: UpdateBundle) throws {
+        // 不删除下载器或系统已有的隔离标记；仅避免对同证书更新主动新增标记。
+        guard !continuesPublisher(of: current) else { return }
+        _ = try UpdateCommand.run("/usr/bin/xattr", ["-w", "com.apple.quarantine", "0083;\(String(Int(Date().timeIntervalSince1970), radix: 16));Screenshot;", app.path])
+    }
     /// 直接读取 Mach-O 头；发行应用不能依赖需安装 Xcode/CLT 的 lipo。
     static func supportsArchitecture(_ executable: URL, cpu: UInt32) throws -> Bool {
         let handle = try FileHandle(forReadingFrom: executable); defer { try? handle.close() }
