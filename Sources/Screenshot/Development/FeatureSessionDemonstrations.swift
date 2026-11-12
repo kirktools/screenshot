@@ -58,16 +58,17 @@ import ImageIO
     session.completion = { image, _ in result = image }
     _ = session.start(registerHotkeys: false, showPanel: false)
     try await Task.sleep(for: .milliseconds(40))
-    for i in 0..<24 {
-        let before = session.diagnosticSnapshot.count, input = viewport(i*10)
+    for i in 0..<featureDemoFrameCount {
+        let before = session.diagnosticSnapshot.count, input = viewport(i * (featureDemoFrameCount == 24 ? 10 : 5))
         provider.source.send(input)
         try await wait { session.diagnosticSnapshot.count > before }
         try input.png().write(to: directory.appendingPathComponent(String(format: "viewport-%02d.png", i)))
+        if featureDemoFrameCount > 24 { try await Task.sleep(for: .milliseconds(170)) }
         guard let view = session.diagnosticControls.first else { throw CaptureError.message("长图演示预览缺失") }
         try featureSnapshot(view, to: directory.appendingPathComponent(String(format: "scroll-%02d.png", i)))
     }
     session.finishCapture(); try await wait { result != nil }
-    guard result!.height == height+230 else { throw CaptureError.message("固定栏演示接缝高度异常：\(result!.height)，预期 \(height+230)") }
+    guard result!.height == height+(featureDemoFrameCount-1)*(featureDemoFrameCount == 24 ? 10 : 5) else { throw CaptureError.message("固定栏演示接缝高度异常：\(result!.height)，预期 \(height+(featureDemoFrameCount-1)*(featureDemoFrameCount == 24 ? 10 : 5))") }
     try result!.png().write(to: directory.appendingPathComponent("fixed-result.png"))
     let gifProvider = FeatureFixtureProvider(), recorder = GIFRecorder(provider: gifProvider, region: region, hotkeys: HotkeyRegistry())
     var gif: Data?
@@ -80,10 +81,10 @@ import ImageIO
     guard let start = button("开始录制"), let stop = button("停止并预览 ↩"), let cancel = button("取消 Esc") else { throw CaptureError.message("GIF 演示按钮缺失") }
     defer { cancel.performClick(nil) }
     start.performClick(nil); try await Task.sleep(for: .milliseconds(40))
-    for i in 0..<24 {
-        let frame = viewport(i*8)
+    for i in 0..<featureDemoFrameCount {
+        let frame = viewport(Int(Double(i)/Double(featureDemoFrameCount-1)*184))
         gifProvider.source.send(frame)
-        try await Task.sleep(for: .milliseconds(120))
+        try await Task.sleep(for: .milliseconds(featureDemoFrameCount == 24 ? 120 : 34))
         try featureSnapshot(recorder.documentationView, to: directory.appendingPathComponent(String(format: "gif-controls-%02d.png", i)))
         try frame.png().write(to: directory.appendingPathComponent(String(format: "gif-input-%02d.png", i)))
     }

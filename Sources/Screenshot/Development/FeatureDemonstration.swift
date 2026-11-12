@@ -1,5 +1,8 @@
 import AppKit
 
+/// 高帧率素材只在独立演示构建中生成，普通导出保持原有 24 帧兼容。
+let featureDemoFrameCount = ProcessInfo.processInfo.environment["SCREENSHOT_DEMO_SMOOTH"] == "1" ? 180 : 24
+
 /// 离线素材使用真实编辑控件及变换逻辑；只捕获本应用视图，不读取桌面。
 @MainActor func featureSnapshot(_ view: NSView, to url: URL) throws {
     view.appearance = NSAppearance(named: .aqua)
@@ -43,7 +46,7 @@ import AppKit
     let ctx = CGContext(data: nil, width: Int(extent.width*2), height: Int(extent.height*2), bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
     ctx.setFillColor(CGColor(gray: 0.12, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: ctx.width, height: ctx.height))
     for (view, rect) in [(content, geometry.image), (toolbar, geometry.toolbar)] {
-        view.appearance = NSAppearance(named: .aqua)
+        view.appearance = NSAppearance(named: view === toolbar ? .darkAqua : .aqua)
         view.layoutSubtreeIfNeeded()
         guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw CaptureError.message("编辑演示无法绘制") }
         view.effectiveAppearance.performAsCurrentDrawingAppearance { view.cacheDisplay(in: view.bounds, to: bitmap) }
@@ -66,8 +69,8 @@ import AppKit
     let handle = base.textHandlePoints(zoom: editor.canvas.zoom)[3]
     let center = base.textPoint(CGPoint(x: base.textSize.width/2, y: base.textSize.height/2))
     guard editor.canvas.beginTextTransform(at: handle) else { throw CaptureError.message("演示缩放手柄未命中") }
-    for i in 0..<12 {
-        let scale = 1 + CGFloat(i)/11*0.6
+    for i in 0..<(featureDemoFrameCount/2) {
+        let scale = 1 + CGFloat(i)/CGFloat(featureDemoFrameCount/2-1)*0.6
         editor.canvas.updateTextTransform(at: CGPoint(x: center.x+(handle.x-center.x)*scale, y: center.y+(handle.y-center.y)*scale))
         try featureEditorSnapshot(editor, to: directory.appendingPathComponent(String(format: "text-%02d.png", i)))
     }
@@ -75,24 +78,25 @@ import AppKit
     let a = editor.canvas.state.annotations.last!, pivot = a.textPoint(CGPoint(x: a.textSize.width/2, y: a.textSize.height/2))
     let rotationHandle = a.textHandlePoints(zoom: editor.canvas.zoom)[4]
     guard editor.canvas.beginTextTransform(at: rotationHandle) else { throw CaptureError.message("演示旋转手柄未命中") }
-    for i in 0..<12 {
-        let angle = -CGFloat(i)/11 * .pi/10
+    for i in 0..<(featureDemoFrameCount/2) {
+        let angle = -CGFloat(i)/CGFloat(featureDemoFrameCount/2-1) * .pi/10
         let x = rotationHandle.x-pivot.x, y = rotationHandle.y-pivot.y
         editor.canvas.updateTextTransform(at: CGPoint(x: pivot.x+x*cos(angle)-y*sin(angle), y: pivot.y+x*sin(angle)+y*cos(angle)))
-        try featureEditorSnapshot(editor, to: directory.appendingPathComponent(String(format: "text-%02d.png", i+12)))
+        try featureEditorSnapshot(editor, to: directory.appendingPathComponent(String(format: "text-%02d.png", i+featureDemoFrameCount/2)))
     }
     editor.canvas.endTextTransform()
     try featureEditorSnapshot(editor, to: directory.appendingPathComponent("editor.png"))
+    if ProcessInfo.processInfo.environment["SCREENSHOT_DEMO_EDITOR_ONLY"] == "1" { return }
     let pinned = render(editor.canvas.state)!
     editor.close()
     try await writeFeatureSessionDemonstrations(document: doc, to: directory)
     try PinnedImage.show(pinned, near: nil)
     guard let window = PinnedImage.diagnosticWindows.last, let view = window.contentView else { throw CaptureError.message("演示贴图未生成") }
     defer { window.close() }
-    for i in 0..<24 {
-        let width = 440+CGFloat(i)*5
+    for i in 0..<featureDemoFrameCount {
+        let width = 440+CGFloat(i)/CGFloat(featureDemoFrameCount-1)*115
         window.setContentSize(CGSize(width: width, height: width*CGFloat(pinned.height)/CGFloat(pinned.width)))
-        window.setFrameOrigin(CGPoint(x: screen.minX+80+CGFloat(i)*5, y: screen.minY+80))
+        window.setFrameOrigin(CGPoint(x: screen.minX+80+CGFloat(i)/CGFloat(featureDemoFrameCount-1)*115, y: screen.minY+80))
         try featureSnapshot(view.superview ?? view, to: directory.appendingPathComponent(String(format: "pin-%02d.png", i)))
     }
     print("新功能演示素材已导出：文字实际变换、固定栏会话、GIF 会话与置顶贴图；无桌面采集。")

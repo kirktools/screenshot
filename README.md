@@ -25,9 +25,9 @@
 
 只想占用一组快捷键？在设置中关闭“长截图独立快捷键”即可；也可保留 **⌘⇧7** 直接唤起长截图。快捷键均可配置。
 
-<img src="docs/images/features-demo.gif" alt="24 秒新功能演示：文字缩放旋转、固定栏长图、GIF 录制和贴图" width="800">
+<img src="docs/images/features-demo.gif" alt="18 秒新功能演示：文字缩放旋转、固定栏长图、GIF 录制和贴图" width="800">
 
-[观看 MP4](docs/images/features-demo.mp4) · <sub>24 秒 · 文字缩放旋转、固定栏长图、GIF 录制与贴图。原生控件和合成内容，脚本驱动，非鼠标实录。</sub>
+[观看 MP4](docs/images/features-demo.mp4) · <sub>18 秒 · 配乐版 · 文字缩放旋转、固定栏长图、GIF 录制与贴图。原生控件和合成内容，脚本驱动，非鼠标实录。</sub>
 
 ## 安装运行
 

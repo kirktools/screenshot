@@ -21,9 +21,9 @@ A lightweight, native macOS capture tool. **One selection for screenshots, scrol
 
 Disable the separate scrolling shortcut in Settings to use only one global shortcut, or keep **⌘⇧7** for direct scrolling capture. Shortcuts are configurable.
 
-![24-second demo: text transforms, fixed bars, GIF recording and pinned images](docs/images/features-demo.gif)
+![18-second demo: text transforms, fixed bars, GIF recording and pinned images](docs/images/features-demo.gif)
 
-[MP4](docs/images/features-demo.mp4) · 24 seconds covering text transforms, fixed-bar scrolling, actual GIF encoding, and pinned images. Native UI and synthetic content; script-driven, with edited pacing rather than mouse interactions.
+[MP4](docs/images/features-demo.mp4) · 18 seconds with original electronic music, covering text transforms, fixed-bar scrolling, actual GIF encoding, and pinned images. Native UI and synthetic content; script-driven, with edited pacing rather than mouse interactions.
 
 ## Install
 
