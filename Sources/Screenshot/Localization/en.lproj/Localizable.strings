@@ -4,7 +4,7 @@
 "settings" = "Settings…";
 "quit" = "Quit";
 
-"capture_text.open_translate" = "Recognize and Translate Text";
+"capture_text.extract" = "Extract Text";
 "capture_text.panel_title" = "Screenshot Text";
 "capture_text.recognizing" = "Recognizing text…";
 "capture_text.ocr_error" = "Recognition failed. Select the region again to retry.";
@@ -64,6 +64,7 @@
 "capture_text.ai_service_error" = "ChatGPT did not return a complete result. Try again later.";
 "capture_text.ai_revocation_failed" = "The previous session was removed locally. Check its authorization in ChatGPT usage settings.";
 
+"capture_image.actions" = "AI Tools";
 "capture_image.title" = "AI Image Analysis";
 "capture_image.preview" = "Preview of the screenshot to send";
 "capture_image.disclosure" = "Send the selected screenshot and your question to %@.";

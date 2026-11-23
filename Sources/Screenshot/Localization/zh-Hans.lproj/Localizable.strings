@@ -4,7 +4,7 @@
 "settings" = "设置…";
 "quit" = "退出";
 
-"capture_text.open_translate" = "识别并翻译文字";
+"capture_text.extract" = "提取文字";
 "capture_text.panel_title" = "截图文字";
 "capture_text.recognizing" = "正在识别文字…";
 "capture_text.ocr_error" = "识别失败，请重新框选后重试。";
@@ -64,6 +64,7 @@
 "capture_text.ai_service_error" = "ChatGPT 没有返回完整结果，请稍后重试。";
 "capture_text.ai_revocation_failed" = "旧会话已从应用移除。请在 ChatGPT 用量设置中确认旧授权是否已撤销。";
 
+"capture_image.actions" = "AI 处理";
 "capture_image.title" = "AI 识图";
 "capture_image.preview" = "将发送的截图预览";
 "capture_image.disclosure" = "点击发送后，当前选区图片和你输入的问题将发送给 %@。";

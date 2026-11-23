@@ -2,6 +2,15 @@ import AppKit
 
 /// 统一使用屏幕点坐标，工具栏优先避开选区；屏幕边缘时夹在可见范围。
 enum CaptureLayout {
+    static func menuTopLeft(under toolbar: CGRect, alignedTo anchorX: CGFloat, size: CGSize, within bounds: CGRect) -> CGPoint {
+        let gap: CGFloat = 4
+        let below = toolbar.minY - gap
+        let above = toolbar.maxY + size.height + gap
+        let x = min(max(anchorX, bounds.minX), max(bounds.minX, bounds.maxX - size.width))
+        let y = below - size.height >= bounds.minY ? below : min(above, bounds.maxY)
+        return CGPoint(x: x, y: y)
+    }
+
     static func toolbar(near region: CGRect, size: CGSize, within bounds: CGRect) -> CGRect {
         let x = min(max(region.midX - size.width / 2, bounds.minX + 8), bounds.maxX - size.width - 8)
         let below = region.minY - size.height - 10

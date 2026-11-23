@@ -383,6 +383,9 @@ final class EditorToolbarPanel: NSPanel {
 @MainActor final class EditorController: NSWindowController, NSTextFieldDelegate, NSWindowDelegate {
     let canvas: EditorCanvas
     private let info = NSTextField(labelWithString: "")
+    private let sizeBadge = PassivePanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    var diagnosticSizeBadge: NSWindow { sizeBadge }
+    private let toolbarHandle = EditorToolbarDragHandle()
     private let toolbar: NSPanel
     private var textPanel: CaptureTextPanel?
     private var editingSuspendedForAI = false
@@ -414,6 +417,8 @@ final class EditorToolbarPanel: NSPanel {
     private let textPresets = NSStackView()
     private let advancedButton = EditorIconButton()
     private let shapeGroup = EditorShapeGroup()
+    let contentActionMenu = NSMenu()
+    let toolbarMenu = EditorToolbarMenu()
     private var shapeButton: NSButton?
     private var lastShape: EditTool = .rectangle
     let shapeMenu = NSMenu()
@@ -448,6 +453,27 @@ final class EditorToolbarPanel: NSPanel {
         toolbar.hidesOnDeactivate = false; toolbar.becomesKeyOnlyIfNeeded = true
         toolbar.backgroundColor = .clear; toolbar.isOpaque = false; toolbar.hasShadow = true
         toolbar.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        sizeBadge.isReleasedWhenClosed = false
+        sizeBadge.level = toolbar.level
+        sizeBadge.hidesOnDeactivate = false
+        sizeBadge.ignoresMouseEvents = true
+        sizeBadge.backgroundColor = .clear; sizeBadge.isOpaque = false; sizeBadge.hasShadow = false
+        sizeBadge.collectionBehavior = toolbar.collectionBehavior
+        info.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        info.textColor = .white
+        info.translatesAutoresizingMaskIntoConstraints = false
+        let badgeBackground = NSView()
+        badgeBackground.wantsLayer = true
+        badgeBackground.layer?.backgroundColor = NSColor(white: 0.12, alpha: 0.95).cgColor
+        badgeBackground.layer?.cornerRadius = 5
+        badgeBackground.addSubview(info)
+        NSLayoutConstraint.activate([
+            info.leadingAnchor.constraint(equalTo: badgeBackground.leadingAnchor, constant: 7),
+            info.trailingAnchor.constraint(equalTo: badgeBackground.trailingAnchor, constant: -7),
+            info.topAnchor.constraint(equalTo: badgeBackground.topAnchor, constant: 3),
+            info.bottomAnchor.constraint(equalTo: badgeBackground.bottomAnchor, constant: -3)
+        ])
+        sizeBadge.contentView = badgeBackground
         canvas.preferredWidth = initial.width
         canvas.maximumZoom = min(1, initial.width / CGFloat(image.width))
         scrollView.permitsScrolling = isLongImage
@@ -508,7 +534,7 @@ final class EditorToolbarPanel: NSPanel {
         let cancel = icon("xmark", "取消 Esc", target: self, action: #selector(cancelEditing))
         let done = icon("checkmark", "复制并完成 ↩", target: self, action: #selector(completeEditing))
         done.contentTintColor = .systemGreen; cancel.contentTintColor = .systemRed
-        let handle = EditorToolbarDragHandle()
+        let handle = toolbarHandle
         handle.isBordered = false; handle.toolTip = "拖动工具栏；双击恢复自动位置"
         handle.widthAnchor.constraint(equalToConstant: 16).isActive = true
         handle.heightAnchor.constraint(equalToConstant: 28).isActive = true
@@ -518,7 +544,28 @@ final class EditorToolbarPanel: NSPanel {
             self.moveToolbar(to: CGPoint(x: self.toolbarDragOrigin.x+delta.x, y: self.toolbarDragOrigin.y+delta.y))
         }
         handle.reset = { [weak self] in self?.toolbarOriginOverride = nil; self?.layoutCapture() }
-        var controls: [NSView] = [handle, info, tools, undo, redo]
+        let crop = icon("crop", "裁剪", target: self, action: #selector(selectCrop))
+        let aiTitle = localized("capture_image.actions")
+        let ai = icon("sparkles", aiTitle, target: self, action: #selector(showContentActions(_:)))
+        ai.title = aiTitle
+        ai.toolTip = nil
+        ai.font = .systemFont(ofSize: 12, weight: .medium)
+        ai.imagePosition = .imageLeading
+        let separator = NSBox()
+        separator.boxType = .separator
+        separator.widthAnchor.constraint(equalToConstant: 1).isActive = true
+        separator.heightAnchor.constraint(equalToConstant: 20).isActive = true
+        for (symbol, key, action) in [
+            ("text.viewfinder", "capture_text.extract", #selector(openCaptureText)),
+            ("sparkles", "capture_image.title", #selector(openImageAnalysis))
+        ] {
+            let title = localized(key)
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+            contentActionMenu.addItem(item)
+        }
+        var controls: [NSView] = [ai, separator, handle, tools, crop, undo, redo]
         if allowScroll {
             let button = icon("arrow.up.and.down", "滚动长截图（重新采集选区）", target: self, action: #selector(beginScroll))
             button.image = CaptureIcons.toolbar("arrow.up.and.down")
@@ -526,8 +573,7 @@ final class EditorToolbarPanel: NSPanel {
             controls.append(icon("gif", "录制 GIF（使用当前选区，不包含标注）", target: self, action: #selector(beginGIF)))
         }
         let pin = icon("pin", "钉到屏幕", target: self, action: #selector(pinEditing))
-        let more = icon("ellipsis", "更多", target: self, action: #selector(showMore(_:)))
-        controls += [more, save, pin, cancel, done]
+        controls += [save, pin, cancel, done]
         let mainRow = NSStackView(views: controls); mainRow.spacing = 8
         mainRow.distribution = .fill; mainRow.alignment = .centerY; mainRow.identifier = NSUserInterfaceItemIdentifier("editor.main")
         for (index, size) in [20.0, 28.0, 44.0].enumerated() {
@@ -594,14 +640,14 @@ final class EditorToolbarPanel: NSPanel {
             if self.rotationField.currentEditor() == nil { self.rotationField.doubleValue = self.canvas.textRotation }
             if self.opacityField.currentEditor() == nil { self.opacityField.doubleValue = self.canvas.textOpacity * 100 }
         }
-        canvas.feedback = { [weak self] message in self?.info.toolTip = message }
+        canvas.feedback = { [weak self] message in self?.toolbarHandle.toolTip = message }
         canvas.finishRequested = { [weak self] in self?.completeEditing() }
         canvas.cancelRequested = { [weak self] in self?.cancelEditing() }
         if frozenCapture != nil {
             displayObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in
                     self?.displayLayoutChanged = true; self?.resizeGesture = nil; self?.resizeHandles.enabled = false
-                    self?.info.toolTip = "显示器布局或缩放已改变，请完成现有截图或取消后重新框选。"
+                    self?.toolbarHandle.toolTip = "显示器布局或缩放已改变，请完成现有截图或取消后重新框选。"
                 }
             }
         }
@@ -625,7 +671,7 @@ final class EditorToolbarPanel: NSPanel {
         if next != canvas.state.captureRegion && reframe(to: next, remember: !gesture.checkpointed) { resizeGesture?.checkpointed = true }
     }
     @discardableResult private func reframe(to region: CGRect, remember: Bool) -> Bool {
-        guard !displayLayoutChanged, let source = frozenCapture, let image = source.crop(region) else { info.toolTip = "选区超出已冻结的屏幕范围或像素上限。"; return false }
+        guard !displayLayoutChanged, let source = frozenCapture, let image = source.crop(region) else { toolbarHandle.toolTip = "选区超出已冻结的屏幕范围或像素上限。"; return false }
         canvas.reframe(image: image, region: region, scale: source.scale, remember: remember)
         return true
     }
@@ -639,15 +685,21 @@ final class EditorToolbarPanel: NSPanel {
         let frame = canvas.state.captureRegion ?? CGRect(x: anchor.minX, y: anchor.maxY - height, width: min(anchor.width, canvas.frame.width), height: height)
         window?.setFrame(frame, display: true)
         resizeHandles.enabled = !displayLayoutChanged && frozenCapture != nil && canvas.state.captureRegion != nil && !isLongImage
-        info.font = .systemFont(ofSize: 11, weight: .regular); info.textColor = .secondaryLabelColor
         info.stringValue = "\(canvas.state.image.width) × \(canvas.state.image.height)"
-        if frozenCapture?.limitsExpansion == true { info.toolTip = "显示器组合超过快照内存上限，仅能在已冻结范围内调整。" }
-        toolbar.contentView?.layoutSubtreeIfNeeded()
-        let size = toolbar.contentView!.fittingSize
+        if frozenCapture?.limitsExpansion == true { toolbarHandle.toolTip = "显示器组合超过快照内存上限，仅能在已冻结范围内调整。" }
         let placement = NSScreen.screens.max { left, right in
             let a = left.frame.intersection(frame), b = right.frame.intersection(frame)
             return a.width * a.height < b.width * b.height
         }?.visibleFrame ?? visibleFrame
+        if let badge = sizeBadge.contentView {
+            let size = badge.fittingSize
+            let x = max(placement.minX, min(frame.minX, placement.maxX - size.width))
+            let above = frame.maxY + 4
+            let y = above + size.height <= placement.maxY ? above : frame.maxY - size.height - 5
+            sizeBadge.setFrame(CGRect(origin: CGPoint(x: x, y: max(placement.minY, y)), size: size), display: true)
+        }
+        toolbar.contentView?.layoutSubtreeIfNeeded()
+        let size = toolbar.contentView!.fittingSize
         if let origin = toolbarOriginOverride {
             let bounds = NSScreen.screens.first { $0.frame.contains(origin) }?.visibleFrame ?? placement
             let x = min(max(origin.x, bounds.minX), max(bounds.minX, bounds.maxX-size.width))
@@ -657,6 +709,7 @@ final class EditorToolbarPanel: NSPanel {
         } else { toolbar.setFrame(CaptureLayout.toolbar(near: frame, size: size, within: placement), display: true) }
     }
     func moveToolbar(to origin: CGPoint) {
+        toolbarMenu.dismiss()
         toolbarOriginOverride = origin; layoutCapture()
     }
     override func showWindow(_ sender: Any?) {
@@ -682,9 +735,10 @@ final class EditorToolbarPanel: NSPanel {
         }
         backdrops.forEach { $0.orderFrontRegardless() }
         super.showWindow(sender)
-        window?.makeKeyAndOrderFront(nil); toolbar.orderFrontRegardless()
+        window?.makeKeyAndOrderFront(nil); sizeBadge.orderFrontRegardless(); toolbar.orderFrontRegardless()
     }
     override func close() {
+        toolbarMenu.dismiss()
         EditorHoverHelp.hide()
         editingSuspendedForAI = false
         closeTextPanel()
@@ -695,6 +749,7 @@ final class EditorToolbarPanel: NSPanel {
             canvas.releaseCaptureHistory(); canvas.cropRequested = nil; frozenCapture = nil
             resizeHandles.enabled = false
         }
+        sizeBadge.orderOut(nil); sizeBadge.close()
         toolbar.orderOut(nil); toolbar.close()
         backdrops.forEach { ($0.contentView as? EditorBackdrop)?.frozenCapture = nil; $0.orderOut(nil); $0.close() }; backdrops.removeAll()
         super.close()
@@ -754,22 +809,8 @@ final class EditorToolbarPanel: NSPanel {
         do { try PinnedImage.show(image, near: captureRegion); close(); dismissed?() }
         catch { showError(error) }
     }
-    @objc private func showMore(_ sender: NSButton) {
-        EditorHoverHelp.hide()
-        let menu = NSMenu()
-        let crop = NSMenuItem(title: "裁剪（适合长图收尾）", action: #selector(selectCrop), keyEquivalent: "")
-        crop.target = self; crop.image = NSImage(systemSymbolName: "crop", accessibilityDescription: "裁剪"); menu.addItem(crop)
-        let textAction = localized("capture_text.open_translate")
-        let text = NSMenuItem(title: textAction, action: #selector(openCaptureText), keyEquivalent: "")
-        text.target = self
-        text.image = NSImage(systemSymbolName: "text.viewfinder", accessibilityDescription: textAction)
-        menu.addItem(text)
-        let visionTitle = localized("capture_image.title")
-        let vision = NSMenuItem(title: visionTitle, action: #selector(openImageAnalysis), keyEquivalent: "")
-        vision.target = self
-        vision.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: visionTitle)
-        menu.addItem(vision)
-        menu.popUp(positioning: nil, at: CGPoint(x: 0, y: sender.bounds.minY), in: sender)
+    @objc private func showContentActions(_ sender: NSButton) {
+        toolbarMenu.show(contentActionMenu, from: sender, in: toolbar, alignToToolbar: true)
     }
     @objc private func openCaptureText() { openCapturePanel(analyzingImage: false) }
     @objc private func openImageAnalysis() { openCapturePanel(analyzingImage: true) }
@@ -812,8 +853,10 @@ final class EditorToolbarPanel: NSPanel {
         guard editingSuspendedForAI != suspended else { return }
         editingSuspendedForAI = suspended
         if suspended {
+            toolbarMenu.dismiss()
             EditorHoverHelp.hide()
             toolbar.orderOut(nil)
+            sizeBadge.orderOut(nil)
             window?.orderOut(nil)
             backdrops.forEach { $0.orderOut(nil) }
             textPanel?.level = .normal
@@ -840,7 +883,7 @@ final class EditorToolbarPanel: NSPanel {
         chooseTool(lastShape)
     }
     @objc private func showShapes(_ sender: NSButton) {
-        EditorHoverHelp.hide(); shapeMenu.popUp(positioning: nil, at: CGPoint(x: 0, y: sender.bounds.minY), in: sender)
+        toolbarMenu.show(shapeMenu, from: shapeGroup, in: toolbar)
     }
     @objc private func selectShape(_ sender: NSMenuItem) { chooseTool(EditTool.allCases[sender.tag]) }
     @objc private func selectToolButton(_ sender: NSButton) { chooseTool(EditTool.allCases[sender.tag]) }

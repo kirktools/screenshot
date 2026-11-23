@@ -134,6 +134,13 @@ import StitchCore
     let negativeScreen = CGRect(x: -1600, y: -200, width: 1600, height: 1000)
     let placement = CaptureLayout.toolbar(near: CGRect(x: -900, y: 300, width: 600, height: 300), size: CGSize(width: 600, height: 50), within: negativeScreen)
     try require(negativeScreen.contains(placement) && placement.maxY < 300, "负坐标屏幕工具栏定位错误")
+    let menuSize = CGSize(width: 180, height: 72)
+    let lowerMenu = CaptureLayout.menuTopLeft(under: placement, alignedTo: placement.minX, size: menuSize, within: negativeScreen)
+    try require(lowerMenu.x == placement.minX && lowerMenu.y == placement.minY - 4, "二级菜单未从工具栏下缘展开")
+    let bottomToolbar = CGRect(x: -250, y: -176, width: 230, height: 48)
+    let upperMenu = CaptureLayout.menuTopLeft(under: bottomToolbar, alignedTo: -40, size: menuSize, within: negativeScreen)
+    try require(upperMenu.x + menuSize.width == negativeScreen.maxX && upperMenu.y - menuSize.height == bottomToolbar.maxY + 4,
+                "靠近屏幕底部或右侧时二级菜单未翻转或夹紧")
     let path = ProcessInfo.processInfo.environment["SCREENSHOT_SELFTEST_DIR"] ?? NSTemporaryDirectory()
     let output = URL(fileURLWithPath: path).appendingPathComponent("screenshot-selftest.png")
     try png.write(to: output, options: .atomic)
@@ -606,9 +613,35 @@ import StitchCore
     defer { editor.close() }
     editor.canvas.apply(Annotation(tool: .rectangle, start: CGPoint(x: 5, y: 5), end: CGPoint(x: 20, y: 20)))
 
+    let row = editor.diagnosticToolbarViews.first { $0.identifier?.rawValue == "editor.main" } as? NSStackView
+    guard let ai = row?.arrangedSubviews.first as? NSButton, ai.title == localized("capture_image.actions"), ai.toolTip == nil,
+          editor.contentActionMenu.items.map(\.title) == [localized("capture_text.extract"), localized("capture_image.title")],
+          editor.diagnosticSizeBadge.isVisible, editor.diagnosticSizeBadge.ignoresMouseEvents,
+          editor.diagnosticSizeBadge.frame.width > 20,
+          let label = editor.diagnosticSizeBadge.contentView?.subviews.first as? NSTextField,
+          label.stringValue == "320 × 200"
+    else { throw CaptureError.message("截图工具栏 AI 入口或选区尺寸异常") }
+
+    func chooseAIAction(_ index: Int) throws {
+        ai.performClick(nil)
+        guard let menu = editor.toolbarMenu.window, menu.isVisible,
+              let toolbar = ai.window, menu.level.rawValue > toolbar.level.rawValue,
+              menu.level.rawValue > editor.window!.level.rawValue,
+              abs(menu.frame.minX - toolbar.frame.minX) < 1,
+              abs(min(abs(menu.frame.minY - toolbar.frame.maxY), abs(toolbar.frame.minY - menu.frame.maxY)) - 4) < 1,
+              !menu.frame.intersects(toolbar.frame),
+              let list = menu.contentView?.subviews.first as? NSStackView,
+              let items = list.arrangedSubviews.first as? NSStackView,
+              let button = items.arrangedSubviews[index] as? NSButton,
+              menu.frame.width > 40, button.frame.width > 40
+        else { throw CaptureError.message("AI 二级菜单没有独立显示在截图工具栏之上") }
+        button.performClick(nil)
+        guard !menu.isVisible else { throw CaptureError.message("选择 AI 操作后没有收起二级菜单") }
+    }
+
     func openTextPanel() throws -> CaptureTextPanel {
-        guard NSApp.sendAction(NSSelectorFromString("openCaptureText"), to: editor, from: nil),
-              let panel = NSApp.windows.compactMap({ $0 as? CaptureTextPanel }).first(where: \.isVisible)
+        try chooseAIAction(0)
+        guard let panel = NSApp.windows.compactMap({ $0 as? CaptureTextPanel }).first(where: \.isVisible)
         else { throw CaptureError.message("未能打开截图文字面板") }
         return panel
     }
@@ -620,11 +653,11 @@ import StitchCore
     panel.model.translated = "合成译文"
     panel.model.setConfiguringAI(true)
     editor.showWindow(nil)
-    guard editor.window?.isVisible == false, !editor.diagnosticGeometry.toolbarVisible,
+    guard editor.window?.isVisible == false, !editor.diagnosticGeometry.toolbarVisible, !editor.diagnosticSizeBadge.isVisible,
           editor.diagnosticGeometry.backdrops == 0, panel.isVisible, panel.level == .normal
     else { throw CaptureError.message("配置 AI 时截图冻结层仍会遮挡浏览器") }
     panel.model.setConfiguringAI(false)
-    guard editor.window?.isVisible == true, editor.diagnosticGeometry.toolbarVisible,
+    guard editor.window?.isVisible == true, editor.diagnosticGeometry.toolbarVisible, editor.diagnosticSizeBadge.isVisible,
           editor.diagnosticGeometry.backdrops == backdropCount, panel.level.rawValue > NSWindow.Level.screenSaver.rawValue,
           editor.captureRegion == region, editor.diagnosticFrozenCaptureRetained,
           editor.canvas.state.annotations.count == 1, panel.model.translated == "合成译文"
@@ -641,8 +674,8 @@ import StitchCore
     guard !secondPanel.isVisible, editor.window?.isVisible == false, editor.diagnosticGeometry.backdrops == 0
     else { throw CaptureError.message("关闭整个截图时重新展示了冻结层") }
     editor.showWindow(nil)
-    guard NSApp.sendAction(NSSelectorFromString("openImageAnalysis"), to: editor, from: nil),
-          let analysis = NSApp.windows.compactMap({ $0 as? CaptureTextPanel }).first(where: \.isVisible),
+    try chooseAIAction(1)
+    guard let analysis = NSApp.windows.compactMap({ $0 as? CaptureTextPanel }).first(where: \.isVisible),
           analysis.title == localized("capture_image.title"), analysis.model.source == nil
     else { throw CaptureError.message("截图工具未能打开免 OCR 的 AI 识图面板") }
     analysis.model.setConfiguringAI(true)
