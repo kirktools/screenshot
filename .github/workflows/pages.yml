@@ -9,6 +9,7 @@ on:
       - 'site/**'
       - 'docs/images/editor.png'
       - 'docs/images/screenshot-intro*'
+      - 'docs/images/screenshot-ai-motion*'
       - 'scripts/*site.py'
       - 'scripts/test-site-download.py'
       - '.github/workflows/pages.yml'

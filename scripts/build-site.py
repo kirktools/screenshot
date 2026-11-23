@@ -22,7 +22,7 @@ for name in ['index.html', 'style.css', 'icon.svg']:
 page = output / 'index.html'
 page.write_text(page.read_text().replace(default_download, download))
 (output / 'assets').mkdir()
-for name in ['editor-features.png', 'features-demo.gif', 'features-demo.mp4', 'features-demo-poster.png']:
+for name in ['editor-features.png', 'screenshot-ai-motion.mp4', 'screenshot-ai-motion-poster.jpg']:
     shutil.copyfile(root / 'docs/images' / name, output / 'assets' / name)
 (output / '.nojekyll').touch()
 (output / 'robots.txt').write_text('User-agent: *\nAllow: /\nSitemap: https://kirktools.github.io/screenshot/sitemap.xml\n')

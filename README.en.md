@@ -24,9 +24,16 @@ Pixel dimensions appear above the selection. Open **AI Tools** on the left of th
 
 Disable the separate scrolling shortcut in Settings to use only one global shortcut, or keep **⌘⇧7** for direct scrolling capture. Shortcuts are configurable.
 
-![18-second demo: text transforms, fixed bars, GIF recording and pinned images](docs/images/features-demo.gif)
+[![Screenshot 27-second product introduction](docs/images/screenshot-ai-motion-poster.jpg)](https://kirktools.github.io/screenshot/#scroll)
 
-[MP4](docs/images/features-demo.mp4) · 18 seconds with original electronic music, covering text transforms, fixed-bar scrolling, actual GIF encoding, and pinned images. Native UI and synthetic content; script-driven, with edited pacing rather than mouse interactions.
+[Watch on the website](https://kirktools.github.io/screenshot/#scroll) · [MP4 file](docs/images/screenshot-ai-motion.mp4) · A 27-second animated overview with Chinese captions, covering region capture, scrolling screenshots, GIFs, on-device text extraction, translation, and AI image analysis.
+
+<details>
+<summary>View the native UI demo GIF</summary>
+
+![Text transforms, fixed bars, GIF recording, and pinned images](docs/images/features-demo.gif)
+
+</details>
 
 ## Install
 

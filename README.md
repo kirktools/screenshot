@@ -28,9 +28,16 @@
 
 只想占用一组快捷键？在设置中关闭“长截图独立快捷键”即可；也可保留 **⌘⇧7** 直接唤起长截图。快捷键均可配置。
 
-<img src="docs/images/features-demo.gif" alt="18 秒新功能演示：文字缩放旋转、固定栏长图、GIF 录制和贴图" width="800">
+[![Screenshot 27 秒功能介绍](docs/images/screenshot-ai-motion-poster.jpg)](https://kirktools.github.io/screenshot/#scroll)
 
-[观看 MP4](docs/images/features-demo.mp4) · <sub>18 秒 · 配乐版 · 文字缩放旋转、固定栏长图、GIF 录制与贴图。原生控件和合成内容，脚本驱动，非鼠标实录。</sub>
+[在官网观看](https://kirktools.github.io/screenshot/#scroll) · [MP4 原文件](docs/images/screenshot-ai-motion.mp4) · 27 秒动效介绍，涵盖区域截图、长图、GIF、本机文字提取、翻译与 AI 识图。
+
+<details>
+<summary>查看原生界面操作 GIF</summary>
+
+![文字缩放旋转、固定栏长图、GIF 录制和贴图](docs/images/features-demo.gif)
+
+</details>
 
 ## 安装运行
 
