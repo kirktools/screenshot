@@ -1,5 +1,6 @@
 import AppKit
 import Carbon
+import KirkTranslation
 import StitchCore
 
 /// 不读取桌面、不申请权限：验证平台渲染、拼接方向和实际导出像素。
@@ -18,6 +19,12 @@ import StitchCore
     try runPermissionFlowSelfTest()
     try runUpdateSelfTest()
     try runGIFEncodingSelfTest()
+    try runCaptureTextRecognitionSelfTest()
+    try await runCaptureTextPanelLayoutSelfTest()
+    try runTranslationSentenceHoverSelfTest()
+    try runCaptureAISettingsSuspensionSelfTest()
+    try await runCloudTranslationSelfTest()
+    print("截图文字：合成图片识别、打码后不再读出文字通过")
     func require(_ condition: Bool, _ message: String) throws { if !condition { throw CaptureError.message(message) } }
     let width = 160, height = 400
     var pixels = [UInt8](repeating: 255, count: width * height * 4)
@@ -539,4 +546,210 @@ import StitchCore
     let expected = editor.captureRegion
     button.performClick(nil)
     guard passedRegion == expected, passedRegion != nil, !editor.diagnosticGeometry.toolbarVisible else { throw CaptureError.message("GIF 未复用选区或未关闭截图浮层") }
+}
+
+/// 使用合成图片验证实际 Vision 识别，以及打码区域不会把原文交给翻译。
+@MainActor private func runCaptureTextRecognitionSelfTest() throws {
+    let image = NSImage(size: NSSize(width: 640, height: 180), flipped: true) { bounds in
+        NSColor.white.setFill()
+        bounds.fill()
+        ("Screenshot test" as NSString).draw(at: CGPoint(x: 40, y: 40), withAttributes: [
+            .font: NSFont.systemFont(ofSize: 48), .foregroundColor: NSColor.black
+        ])
+        return true
+    }
+    guard let pixels = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+          try CaptureTextRecognition.recognize(pixels).contains("Screenshot test") else {
+        throw CaptureError.message("截图文字识别未读出合成文字")
+    }
+    let canvas = EditorCanvas(image: pixels)
+    canvas.apply(Annotation(tool: .redact, start: .zero, end: CGPoint(x: pixels.width, y: pixels.height)))
+    guard let redacted = render(canvas.state), try CaptureTextRecognition.recognize(redacted).isEmpty else {
+        throw CaptureError.message("截图文字识别读出了被遮挡内容")
+    }
+}
+
+/// 建立真实宿主窗口，检查加载中的短内容无法改变浮窗尺寸。
+@MainActor private func runCaptureTextPanelLayoutSelfTest() async throws {
+    let context = CGContext(data: nil, width: 32, height: 32, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+    let model = CaptureTextModel()
+    let panel = CaptureTextPanel(contentRect: CGRect(x: 80, y: 120, width: 650, height: 340),
+                                 image: context.makeImage()!, model: model)
+    panel.isReleasedWhenClosed = false
+    panel.orderFrontRegardless()
+    defer { panel.close() }
+    func checkSize() throws {
+        panel.contentView?.layoutSubtreeIfNeeded()
+        let size = panel.contentRect(forFrameRect: panel.frame).size
+        guard size.width >= 649, size.height >= 339, panel.contentMinSize.width >= 480 else {
+            throw CaptureError.message("截图文字面板尺寸异常：内容 \(size)，最小尺寸 \(panel.contentMinSize)")
+        }
+    }
+    try checkSize()
+    try await Task.sleep(for: .milliseconds(120))
+    try checkSize()
+    model.source = "Original text"
+    model.status = localized("capture_text.language_download")
+    try await Task.sleep(for: .milliseconds(50))
+    try checkSize()
+    print("截图文字面板：识别等待及原文显示时均保留窗口尺寸")
+}
+
+@MainActor private func runCaptureAISettingsSuspensionSelfTest() throws {
+    let image = CGContext(data: nil, width: 320, height: 200, bitsPerComponent: 8, bytesPerRow: 0,
+                          space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!.makeImage()!
+    let region = CGRect(x: 100, y: 150, width: 320, height: 200)
+    let frozen = FrozenCapture(tiles: [FrozenCaptureTile(region: region, image: image)])
+    let editor = EditorController(image: image, region: region, frozenCapture: frozen)
+    editor.showWindow(nil)
+    defer { editor.close() }
+    editor.canvas.apply(Annotation(tool: .rectangle, start: CGPoint(x: 5, y: 5), end: CGPoint(x: 20, y: 20)))
+
+    func openTextPanel() throws -> CaptureTextPanel {
+        guard NSApp.sendAction(NSSelectorFromString("openCaptureText"), to: editor, from: nil),
+              let panel = NSApp.windows.compactMap({ $0 as? CaptureTextPanel }).first(where: \.isVisible)
+        else { throw CaptureError.message("未能打开截图文字面板") }
+        return panel
+    }
+
+    let panel = try openTextPanel()
+    let backdropCount = editor.diagnosticGeometry.backdrops
+    guard backdropCount > 0 else { throw CaptureError.message("未建立用于复现的冻结遮罩") }
+    panel.model.source = "Synthetic source"
+    panel.model.translated = "合成译文"
+    panel.model.setConfiguringAI(true)
+    editor.showWindow(nil)
+    guard editor.window?.isVisible == false, !editor.diagnosticGeometry.toolbarVisible,
+          editor.diagnosticGeometry.backdrops == 0, panel.isVisible, panel.level == .normal
+    else { throw CaptureError.message("配置 AI 时截图冻结层仍会遮挡浏览器") }
+    panel.model.setConfiguringAI(false)
+    guard editor.window?.isVisible == true, editor.diagnosticGeometry.toolbarVisible,
+          editor.diagnosticGeometry.backdrops == backdropCount, panel.level.rawValue > NSWindow.Level.screenSaver.rawValue,
+          editor.captureRegion == region, editor.diagnosticFrozenCaptureRetained,
+          editor.canvas.state.annotations.count == 1, panel.model.translated == "合成译文"
+    else { throw CaptureError.message("从 AI 设置返回后没有恢复原选区、标注和译文") }
+
+    panel.model.setConfiguringAI(true)
+    panel.close()
+    guard editor.window?.isVisible == true, editor.diagnosticGeometry.backdrops == backdropCount
+    else { throw CaptureError.message("关闭 AI 设置窗口后未恢复截图") }
+
+    let secondPanel = try openTextPanel()
+    secondPanel.model.setConfiguringAI(true)
+    editor.close()
+    guard !secondPanel.isVisible, editor.window?.isVisible == false, editor.diagnosticGeometry.backdrops == 0
+    else { throw CaptureError.message("关闭整个截图时重新展示了冻结层") }
+    print("AI 翻译设置：冻结层暂停、浏览器窗口层级、返回及关闭恢复通过")
+}
+
+@MainActor private func runTranslationSentenceHoverSelfTest() throws {
+    let source = "The first example is short. The second example has more words."
+    let target = "第一个例子很短。第二个例子有更多词。"
+    let pairs = TranslationSentencePairs(original: source, translation: target)
+    guard pairs.canHighlight, pairs.original.count == 2, pairs.translation.count == 2,
+          TranslationSentencePairs(original: source, translation: "合并成一句。").isApproximate else {
+        throw CaptureError.message("翻译句子配对未正确处理中英文边界或合并译句")
+    }
+
+    let wrapped = TranslationSentencePairs(original: "Here is a short\nexample. Here is another example.", translation: target)
+    guard wrapped.canHighlight, !wrapped.isApproximate, wrapped.originalSentenceCount == 2 else {
+        throw CaptureError.message("OCR 硬换行导致错误分句")
+    }
+    let many = "One sentence. Two sentences. Three sentences. Four sentences. Five sentences. Six sentences. Seven sentences. Eight sentences. Nine sentences. Ten sentences."
+    let fewer = "第一段。第二段。第三段。第四段。第五段。第六段。"
+    for (left, right) in [(many, fewer), (fewer, many)] {
+        let grouped = TranslationSentencePairs(original: left, translation: right)
+        guard grouped.isApproximate, grouped.canHighlight, grouped.original.count == 6,
+              NSMaxRange(grouped.original.last!) == left.utf16.count,
+              NSMaxRange(grouped.translation.last!) == right.utf16.count else {
+            throw CaptureError.message("十句与六句的翻译段落未建立完整高亮")
+        }
+    }
+
+    let segmented = SegmentedTranslation(source: source, target: "zh-Hans")
+    let explicit = segmented.render("第一句没有句号[[SEG]]第二句也没有")
+    guard segmented.marker == "[[SEG]]",
+          explicit.text == "第一句没有句号第二句也没有",
+          explicit.pairs?.translation.count == 2,
+          segmented.render("译文[[SE", streaming: true).text == "译文",
+          segmented.render("只返回一段").pairs == nil else {
+        throw CaptureError.message("翻译联动未正确处理模型分段或流式标记")
+    }
+
+    let scroll = LinkedTranslationText.makeScrollView()
+    guard let view = scroll.documentView as? SentenceHoverTextView,
+          let layout = view.layoutManager, let container = view.textContainer else {
+        throw CaptureError.message("翻译文本没有可用的原生布局")
+    }
+    let window = NSWindow(contentRect: CGRect(x: 40, y: 40, width: 280, height: 140),
+                          styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = scroll
+    defer { window.close() }
+    view.string = source
+    view.sentences = pairs.original
+    view.updateTrackingAreas()
+    guard view.trackingAreas.contains(where: { $0.options.contains(.activeAlways) }) else {
+        throw CaptureError.message("翻译悬停依赖浮窗取得键盘焦点")
+    }
+    layout.ensureLayout(for: container)
+    let glyphs = layout.glyphRange(forCharacterRange: NSRange(location: pairs.original[1].location, length: 1),
+                                   actualCharacterRange: nil)
+    let glyph = layout.boundingRect(forGlyphRange: glyphs, in: container)
+    let cursor = view.convert(CGPoint(x: glyph.midX + view.textContainerOrigin.x,
+                                     y: glyph.midY + view.textContainerOrigin.y), to: nil)
+    guard let move = NSEvent.mouseEvent(with: .mouseMoved, location: cursor, modifierFlags: [],
+                                        timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                        eventNumber: 1, clickCount: 0, pressure: 0) else {
+        throw CaptureError.message("未能创建翻译悬停测试事件")
+    }
+    var hovered: Int?
+    view.onHover = { hovered = $0 }
+    view.mouseMoved(with: move)
+    guard hovered == 1 else { throw CaptureError.message("翻译悬停未命中第二句") }
+    let sourceColor = CaptureTextModel.TextSide.original.highlightColor
+    let translatedColor = CaptureTextModel.TextSide.translation.highlightColor
+    view.updateHighlight(pairs.original[1], color: sourceColor, reveal: false)
+    let location = pairs.original[1].location
+    guard sourceColor != translatedColor,
+          layout.temporaryAttribute(.backgroundColor, atCharacterIndex: location, effectiveRange: nil) as? NSColor == sourceColor else {
+        throw CaptureError.message("译句悬停未添加高亮")
+    }
+    view.mouseExited(with: move)
+    view.updateHighlight(nil, color: sourceColor, reveal: false)
+    guard hovered == nil,
+          layout.temporaryAttribute(.backgroundColor, atCharacterIndex: location, effectiveRange: nil) == nil else {
+        throw CaptureError.message("鼠标离开后未清除译句高亮")
+    }
+    print("翻译句子联动：中英文分句、合句保护、原生文字命中及临时高亮通过")
+}
+
+/// 模拟配置的云端端点，验证请求通路和额度错误，不访问真实服务。
+private func runCloudTranslationSelfTest() async throws {
+    let config = try CloudTranslation(baseURL: "https://example.invalid/v1/", model: "fixture-model")
+    guard config.endpoint.absoluteString == "https://example.invalid/v1/chat/completions",
+          (try? CloudTranslation(baseURL: "http://example.invalid/v1", model: "fixture-model")) == nil else {
+        throw CaptureError.message("云端翻译 API 地址校验异常")
+    }
+    let settings = URLSessionConfiguration.ephemeral
+    settings.protocolClasses = [UpdateHTTPStub.self]
+    let session = URLSession(configuration: settings)
+    defer {
+        session.invalidateAndCancel()
+        UpdateHTTPStub.set([:])
+    }
+    let endpoint = config.endpoint.absoluteString
+    let expected = "保留配置字段 key 和快捷键 Ctrl+S。"
+    let reply = try JSONSerialization.data(withJSONObject: ["choices": [["message": ["role": "assistant", "content": expected]]]])
+    UpdateHTTPStub.set([endpoint: (200, reply)])
+    let input = "Keep the key field and Ctrl+S shortcut."
+    let result = try await config.translate(input, target: "zh-Hans", apiKey: "fixture", session: session)
+    guard result == expected else { throw CaptureError.message("云端翻译未解析有效译文") }
+    UpdateHTTPStub.set([endpoint: (429, Data())])
+    do {
+        _ = try await config.translate(input, target: "zh-Hans", apiKey: "fixture", session: session)
+        throw CaptureError.message("云端翻译未报告额度错误")
+    } catch CloudTranslation.Failure.denied(429) {}
+    print("云端翻译：HTTPS 配置、模拟响应及额度错误通过")
 }

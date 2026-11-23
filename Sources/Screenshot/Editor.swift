@@ -380,10 +380,12 @@ final class EditorToolbarPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-@MainActor final class EditorController: NSWindowController, NSTextFieldDelegate {
+@MainActor final class EditorController: NSWindowController, NSTextFieldDelegate, NSWindowDelegate {
     let canvas: EditorCanvas
     private let info = NSTextField(labelWithString: "")
     private let toolbar: NSPanel
+    private var textPanel: CaptureTextPanel?
+    private var editingSuspendedForAI = false
     private var toolbarOriginOverride: CGPoint?
     private var toolbarDragOrigin = CGPoint.zero
     private var backdrops: [NSWindow] = []
@@ -524,7 +526,7 @@ final class EditorToolbarPanel: NSPanel {
             controls.append(icon("gif", "录制 GIF（使用当前选区，不包含标注）", target: self, action: #selector(beginGIF)))
         }
         let pin = icon("pin", "钉到屏幕", target: self, action: #selector(pinEditing))
-        let more = icon("ellipsis", "更多：裁剪", target: self, action: #selector(showMore(_:)))
+        let more = icon("ellipsis", "更多", target: self, action: #selector(showMore(_:)))
         controls += [more, save, pin, cancel, done]
         let mainRow = NSStackView(views: controls); mainRow.spacing = 8
         mainRow.distribution = .fill; mainRow.alignment = .centerY; mainRow.identifier = NSUserInterfaceItemIdentifier("editor.main")
@@ -658,6 +660,10 @@ final class EditorToolbarPanel: NSPanel {
         toolbarOriginOverride = origin; layoutCapture()
     }
     override func showWindow(_ sender: Any?) {
+        if editingSuspendedForAI {
+            textPanel?.makeKeyAndOrderFront(sender)
+            return
+        }
         if backdrops.isEmpty {
             for screen in NSScreen.screens {
                 let backdrop = NSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
@@ -680,6 +686,8 @@ final class EditorToolbarPanel: NSPanel {
     }
     override func close() {
         EditorHoverHelp.hide()
+        editingSuspendedForAI = false
+        closeTextPanel()
         resizeGesture = nil
         if let displayObserver { NotificationCenter.default.removeObserver(displayObserver); self.displayObserver = nil }
         if frozenCapture != nil {
@@ -751,8 +759,74 @@ final class EditorToolbarPanel: NSPanel {
         let menu = NSMenu()
         let crop = NSMenuItem(title: "裁剪（适合长图收尾）", action: #selector(selectCrop), keyEquivalent: "")
         crop.target = self; crop.image = NSImage(systemSymbolName: "crop", accessibilityDescription: "裁剪"); menu.addItem(crop)
+        let textAction = localized("capture_text.open_translate")
+        let text = NSMenuItem(title: textAction, action: #selector(openCaptureText), keyEquivalent: "")
+        text.target = self
+        text.image = NSImage(systemSymbolName: "text.viewfinder", accessibilityDescription: textAction)
+        menu.addItem(text)
         menu.popUp(positioning: nil, at: CGPoint(x: 0, y: sender.bounds.minY), in: sender)
     }
+    @objc private func openCaptureText() {
+        toolbar.makeFirstResponder(nil)
+        canvas.commitText()
+        // 识别用户当前看到的内容，避免读取已被打码覆盖的文字。
+        let state = canvas.state
+        guard let image = state.annotations.isEmpty ? state.image : render(state) else { return }
+        closeTextPanel()
+        let size = NSSize(width: min(650, visibleFrame.width - 16), height: min(460, visibleFrame.height - 16))
+        let region = captureRegion ?? anchor
+        let x = min(max(region.midX - size.width / 2, visibleFrame.minX + 8), visibleFrame.maxX - size.width - 8)
+        let preferredY = region.maxY + 12
+        let y = preferredY + size.height <= visibleFrame.maxY
+            ? preferredY
+            : max(visibleFrame.minY + 8, min(region.minY - size.height - 12, visibleFrame.maxY - size.height - 8))
+        let model = CaptureTextModel()
+        let panel = CaptureTextPanel(contentRect: CGRect(origin: CGPoint(x: x, y: y), size: size),
+                                     image: image, model: model)
+        panel.title = localized("capture_text.panel_title")
+        panel.delegate = self
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
+        panel.level = captureTextPanelLevel
+        model.aiConfigurationChanged = { [weak self] configuring in
+            self?.setEditingSuspendedForAI(configuring)
+        }
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        textPanel = panel
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    private var captureTextPanelLevel: NSWindow.Level {
+        NSWindow.Level(rawValue: toolbar.level.rawValue + 1)
+    }
+
+    private func setEditingSuspendedForAI(_ suspended: Bool) {
+        guard editingSuspendedForAI != suspended else { return }
+        editingSuspendedForAI = suspended
+        if suspended {
+            EditorHoverHelp.hide()
+            toolbar.orderOut(nil)
+            window?.orderOut(nil)
+            backdrops.forEach { $0.orderOut(nil) }
+            textPanel?.level = .normal
+            textPanel?.makeKeyAndOrderFront(nil)
+        } else {
+            showWindow(nil)
+            textPanel?.level = captureTextPanelLevel
+            textPanel?.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    private func closeTextPanel() { textPanel?.close() }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let panel = notification.object as? CaptureTextPanel, panel === textPanel else { return }
+        textPanel = nil
+        panel.model.aiConfigurationChanged = nil
+        panel.contentViewController = nil
+        setEditingSuspendedForAI(false)
+    }
+
     @objc private func selectCrop() { chooseTool(.crop) }
     @objc private func activateShape() {
         chooseTool(lastShape)

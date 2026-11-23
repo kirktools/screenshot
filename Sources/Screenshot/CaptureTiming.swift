@@ -26,11 +26,13 @@ final class CaptureTiming: @unchecked Sendable {
     private let lock = NSLock()
     private let start = ProcessInfo.processInfo.systemUptime
     private let date = Date()
+    let operationID: String
     private let source: String
     private let active: Bool
     private var events: [[String: Any]] = []
     private var ended = false
-    init(source: String) {
+    init(source: String, operationID: String = UUID().uuidString) {
+        self.operationID = operationID
         let testing = CommandLine.arguments.contains { $0.contains("self-test") || $0.contains("smoke-test") }
         self.source = testing ? "test." + source : source
         active = Self.enabled
@@ -43,15 +45,17 @@ final class CaptureTiming: @unchecked Sendable {
         if let value { event["value"] = value }
         events.append(event)
     }
-    func finish(_ outcome: String) {
+    func finish(_ outcome: String, error: String? = nil) {
         guard active else { return }
         lock.lock()
         guard !ended else { lock.unlock(); return }
         ended = true
-        let record: [String: Any] = ["schema": 1, "run_id": Self.runID, "timestamp": date.timeIntervalSince1970,
+        var record: [String: Any] = ["schema": 2, "run_id": Self.runID, "operation_id": operationID, "timestamp": date.timeIntervalSince1970,
             "source": source, "outcome": outcome, "total_ms": (ProcessInfo.processInfo.systemUptime - start) * 1000,
             "events": events]
+        if let error { record["error_code"] = error }
         lock.unlock()
+        let snapshot = record
         // 写盘排在截图关键路径之后；单文件约 1 MB，最多保留一份轮转备份。
         Self.writer.async {
             do {
@@ -63,8 +67,8 @@ final class CaptureTiming: @unchecked Sendable {
                     if FileManager.default.fileExists(atPath: backup.path) { try FileManager.default.removeItem(at: backup) }
                     try FileManager.default.moveItem(at: url, to: backup)
                 }
-                var serialized = record
-                if let timestamp = record["timestamp"] as? Double {
+                var serialized = snapshot
+                if let timestamp = snapshot["timestamp"] as? Double {
                     serialized["timestamp"] = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: timestamp))
                 }
                 var data = try JSONSerialization.data(withJSONObject: serialized, options: [.sortedKeys]); data.append(10)

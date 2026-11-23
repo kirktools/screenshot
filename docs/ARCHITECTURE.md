@@ -10,9 +10,12 @@ AppDelegate（菜单、权限、一次只运行一个捕获会话）
  ├─ ScrollSession（流式采集、后台匹配、恢复/暂停/重试/撤销、资源限制）
  │   └─ StitchCore（匹配、ScrollCaptureTracker 双向规则、CaptureLifecycle 输出资格，无 AppKit）
  └─ EditorController / EditorCanvas → paint / render → PNG / 剪贴板
+     └─ CaptureTextView → Vision OCR → KirkTranslation（macOS 15+）
 ```
 
-没有第三方依赖、自建服务器或遥测。截图采集和处理不联网；仅用户主动检查更新时访问 GitHub。不是一个只有 UI 的原型；SwiftPM 编译可执行文件，脚本组装真实 .app。UI 使用 AppKit 便于精确控制非激活面板和鼠标坐标；未来可在不改变核心的情况下使用 SwiftUI 替换设置界面。
+没有第三方依赖、自建服务器或遥测。截图采集和处理不联网；系统翻译可能按需下载语言模型。用户主动检查更新时访问 GitHub，主动选择 AI 翻译时访问所选服务。不是一个只有 UI 的原型；SwiftPM 编译可执行文件，脚本组装真实 .app。UI 使用 AppKit 便于精确控制非激活面板和鼠标坐标；未来可在不改变核心的情况下使用 SwiftUI 替换设置界面。
+
+截图文字使用当前渲染结果，已遮挡的像素不会作为原图传入 OCR。独立的 `KirkTranslation` Swift target 只接收文本与目标语言，通过系统翻译会话、自配 Chat Completions API 或 ChatGPT 套餐授权的 Responses API 返回结果。自配 API 密钥保存在宿主的钥匙串条目，ChatGPT 授权由翻译模块按宿主标识保存在本机用户专用目录。未来 Hotkey 可以引用同一实现，并自行决定文本来源与结果界面。macOS 14 可使用 Vision 识别、复制原文和 AI 翻译。
 
 ## 像素与坐标
 

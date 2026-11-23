@@ -517,13 +517,13 @@ struct ScreenPermissionAccess {
         status.textColor = .secondaryLabelColor; views.append(status)
         let hotkeyStatus = NSTextField(wrappingLabelWithString: "")
         hotkeyStatusLabel = hotkeyStatus; views.append(hotkeyStatus)
-        let diagnostics = NSButton(checkboxWithTitle: "记录本机截图耗时", target: self, action: #selector(toggleCaptureTiming(_:)))
+        let diagnostics = NSButton(checkboxWithTitle: "记录本机诊断日志", target: self, action: #selector(toggleCaptureTiming(_:)))
         diagnostics.state = CaptureTiming.enabled ? .on : .off
         views.append(diagnostics)
-        let diagnosticHelp = NSTextField(wrappingLabelWithString: "仅记录截图阶段、结果和耗时，不记录图片、窗口标题或输入内容，不上传。更改从下一次截图生效；关闭后保留已有记录。最多保留约 2 MB。")
+        let diagnosticHelp = NSTextField(wrappingLabelWithString: "记录截图与 AI 翻译耗时，以及 ChatGPT 模型列表请求状态，不记录图片、文字或授权凭据，不上传。关闭后保留已有记录，最多约 2 MB。")
         diagnosticHelp.textColor = .secondaryLabelColor
         views.append(diagnosticHelp)
-        let diagnosticActions = NSStackView(views: [NSButton(title: "打开日志目录", target: self, action: #selector(openTimingLogs)), NSButton(title: "清除耗时记录", target: self, action: #selector(clearTimingLogs))])
+        let diagnosticActions = NSStackView(views: [NSButton(title: "打开日志目录", target: self, action: #selector(openTimingLogs)), NSButton(title: "清除诊断记录", target: self, action: #selector(clearTimingLogs))])
         diagnosticActions.spacing = 12; views.append(diagnosticActions)
         let version = NSTextField(labelWithString: "版本 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版") · macOS 14+ · MIT © kirktools")
         version.textColor = .secondaryLabelColor
@@ -555,7 +555,7 @@ struct ScreenPermissionAccess {
     @objc private func clearTimingLogs() {
         CaptureTiming.clear { success in
             Task { @MainActor in
-                if !success { showError(CaptureError.message("无法清除耗时记录，请检查日志目录的写入权限。")) }
+                if !success { showError(CaptureError.message("无法清除诊断记录，请检查日志目录的写入权限。")) }
             }
         }
     }

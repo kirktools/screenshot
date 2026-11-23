@@ -9,6 +9,8 @@ let package = Package(
     name: "Screenshot", defaultLocalization: "zh-Hans", platforms: [.macOS(.v14)],
     products: [.library(name: "StitchCore", targets: ["StitchCore"]), .executable(name: "Screenshot", targets: ["Screenshot"])],
     targets: [.target(name: "StitchCore"),
-              .executableTarget(name: "Screenshot", dependencies: ["StitchCore"], exclude: buildDocumentationDemo ? [] : ["Development"], resources: [.process("Localization")], swiftSettings: buildDocumentationDemo ? [.define("SCREENSHOT_DOCUMENTATION_DEMO")] : []),
-              .testTarget(name: "StitchCoreTests", dependencies: ["StitchCore"])],
+              .target(name: "KirkTranslation"),
+              .executableTarget(name: "Screenshot", dependencies: ["StitchCore", "KirkTranslation"], exclude: buildDocumentationDemo ? [] : ["Development"], resources: [.process("Localization")], swiftSettings: buildDocumentationDemo ? [.define("SCREENSHOT_DOCUMENTATION_DEMO")] : []),
+              .testTarget(name: "StitchCoreTests", dependencies: ["StitchCore"]),
+              .testTarget(name: "KirkTranslationTests", dependencies: ["KirkTranslation"])],
     swiftLanguageModes: [.v5])
