@@ -640,6 +640,15 @@ import StitchCore
     editor.close()
     guard !secondPanel.isVisible, editor.window?.isVisible == false, editor.diagnosticGeometry.backdrops == 0
     else { throw CaptureError.message("关闭整个截图时重新展示了冻结层") }
+    editor.showWindow(nil)
+    guard NSApp.sendAction(NSSelectorFromString("openImageAnalysis"), to: editor, from: nil),
+          let analysis = NSApp.windows.compactMap({ $0 as? CaptureTextPanel }).first(where: \.isVisible),
+          analysis.title == localized("capture_image.title"), analysis.model.source == nil
+    else { throw CaptureError.message("截图工具未能打开免 OCR 的 AI 识图面板") }
+    analysis.model.setConfiguringAI(true)
+    guard editor.diagnosticGeometry.backdrops == 0, analysis.isVisible, analysis.level == .normal
+    else { throw CaptureError.message("AI 识图设置未释放截图冻结层") }
+    analysis.close()
     print("AI 翻译设置：冻结层暂停、浏览器窗口层级、返回及关闭恢复通过")
 }
 

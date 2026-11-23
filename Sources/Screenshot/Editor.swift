@@ -764,9 +764,17 @@ final class EditorToolbarPanel: NSPanel {
         text.target = self
         text.image = NSImage(systemSymbolName: "text.viewfinder", accessibilityDescription: textAction)
         menu.addItem(text)
+        let visionTitle = localized("capture_image.title")
+        let vision = NSMenuItem(title: visionTitle, action: #selector(openImageAnalysis), keyEquivalent: "")
+        vision.target = self
+        vision.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: visionTitle)
+        menu.addItem(vision)
         menu.popUp(positioning: nil, at: CGPoint(x: 0, y: sender.bounds.minY), in: sender)
     }
-    @objc private func openCaptureText() {
+    @objc private func openCaptureText() { openCapturePanel(analyzingImage: false) }
+    @objc private func openImageAnalysis() { openCapturePanel(analyzingImage: true) }
+
+    private func openCapturePanel(analyzingImage: Bool) {
         toolbar.makeFirstResponder(nil)
         canvas.commitText()
         // 识别用户当前看到的内容，避免读取已被打码覆盖的文字。
@@ -782,8 +790,8 @@ final class EditorToolbarPanel: NSPanel {
             : max(visibleFrame.minY + 8, min(region.minY - size.height - 12, visibleFrame.maxY - size.height - 8))
         let model = CaptureTextModel()
         let panel = CaptureTextPanel(contentRect: CGRect(origin: CGPoint(x: x, y: y), size: size),
-                                     image: image, model: model)
-        panel.title = localized("capture_text.panel_title")
+                                     image: image, model: model, analyzingImage: analyzingImage)
+        panel.title = localized(analyzingImage ? "capture_image.title" : "capture_text.panel_title")
         panel.delegate = self
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false

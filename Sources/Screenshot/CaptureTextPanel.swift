@@ -18,11 +18,16 @@ enum CaptureTextRecognition {
 final class CaptureTextPanel: NSPanel {
     let model: CaptureTextModel
 
-    init(contentRect: CGRect, image: CGImage, model: CaptureTextModel) {
+    init(contentRect: CGRect, image: CGImage, model: CaptureTextModel, analyzingImage: Bool = false) {
         self.model = model
         super.init(contentRect: contentRect, styleMask: [.titled, .closable, .resizable, .nonactivatingPanel],
                    backing: .buffered, defer: false)
-        let hosting = NSHostingController(rootView: CaptureTextView(image: image, model: model))
+        let hosting: NSHostingController<AnyView>
+        if analyzingImage {
+            hosting = NSHostingController(rootView: AnyView(CaptureImageAnalysisView(image: image, model: model)))
+        } else {
+            hosting = NSHostingController(rootView: AnyView(CaptureTextView(image: image, model: model)))
+        }
         // 加载中的内容只有一行，不能用它的理想尺寸调整整个浮窗。
         hosting.sizingOptions = []
         let container = NSViewController()

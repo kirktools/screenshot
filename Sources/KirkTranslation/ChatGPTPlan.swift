@@ -230,6 +230,22 @@ import Security
         return try await streamTranslation(request, onHeaders: onHeaders, onText: onText, onNetworkTiming: onNetworkTiming)
     }
 
+    public func analyze(_ analysis: ImageAnalysis, model: String,
+                        onHeaders: ((Int) -> Void)? = nil, onText: ((String) -> Void)? = nil) async throws -> String {
+        let token = try await accessToken()
+        return try await streamTranslation(Self.analysisRequest(analysis, model: model, token: token),
+                                           onHeaders: onHeaders, onText: onText)
+    }
+
+    static func analysisRequest(_ analysis: ImageAnalysis, model: String, token: String) throws -> URLRequest {
+        try responsesRequest(model: model, token: token, instructions: analysis.instructions, input: [
+            ["role": "user", "content": [
+                ["type": "input_text", "text": analysis.question],
+                ["type": "input_image", "image_url": analysis.imageURL, "detail": "high"]
+            ]]
+        ])
+    }
+
     func streamTranslation(_ request: URLRequest, onHeaders: ((Int) -> Void)? = nil,
                            onText: ((String) -> Void)? = nil,
                            onNetworkTiming: (@Sendable (TranslationNetworkTiming) -> Void)? = nil) async throws -> String {
@@ -260,6 +276,13 @@ import Security
     }
 
     static func translationRequest(_ text: String, target: String, model: String, token: String, segmentMarker: String? = nil) throws -> URLRequest {
+        try responsesRequest(model: model, token: token,
+                             instructions: CloudTranslation.instructions(target: target, segmentMarker: segmentMarker),
+                             input: [["role": "user", "content": text]])
+    }
+
+    private static func responsesRequest(model: String, token: String, instructions: String,
+                                         input: [[String: Any]]) throws -> URLRequest {
         let selected = model.isEmpty ? defaultTranslationModel : model
         var request = URLRequest(url: URL(string: resource + "/responses")!, timeoutInterval: 45)
         request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
@@ -268,8 +291,7 @@ import Security
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         var payload: [String: Any] = [
             "model": selected, "store": false, "stream": true,
-            "instructions": CloudTranslation.instructions(target: target, segmentMarker: segmentMarker),
-            "input": [["role": "user", "content": text]]
+            "instructions": instructions, "input": input
         ]
         if selected == defaultTranslationModel { payload["reasoning"] = ["effort": "low"] }
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)

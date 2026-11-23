@@ -45,6 +45,28 @@ final class ChatGPTPlanTests: XCTestCase {
         XCTAssertThrowsError(try reopened.read())
     }
 
+    @MainActor func testImageAnalysisUsesTheProviderSpecificImageInput() throws {
+        let png = Data([1, 2, 3])
+        let analysis = try ImageAnalysis(png: png, question: "解释这道题", language: "zh-Hans")
+        let responses = try ChatGPTPlan.analysisRequest(analysis, model: "", token: "fixture")
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(responses.httpBody)) as? [String: Any])
+        let input = try XCTUnwrap(payload["input"] as? [[String: Any]])
+        let parts = try XCTUnwrap(input.first?["content"] as? [[String: String]])
+        XCTAssertEqual(parts.map { $0["type"] }, ["input_text", "input_image"])
+        XCTAssertEqual(parts.first?["text"], "解释这道题")
+        XCTAssertEqual(parts.last?["image_url"], "data:image/png;base64,AQID")
+        XCTAssertEqual(payload["store"] as? Bool, false)
+
+        let api = try CloudTranslation(baseURL: "https://example.invalid/v1", model: "vision-fixture")
+        let completions = try api.analysisRequest(analysis, apiKey: "fixture")
+        let chat = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(completions.httpBody)) as? [String: Any])
+        let messages = try XCTUnwrap(chat["messages"] as? [[String: Any]])
+        let chatParts = try XCTUnwrap(messages.last?["content"] as? [[String: Any]])
+        XCTAssertEqual(chatParts.last?["type"] as? String, "image_url")
+        XCTAssertEqual((chatParts.last?["image_url"] as? [String: String])?["url"], parts.last?["image_url"])
+        XCTAssertThrowsError(try ImageAnalysis(png: Data(), question: "", language: "zh-Hans"))
+    }
+
     @MainActor func testDefaultTranslationRequestsLunaWithLowEffort() throws {
         let request = try ChatGPTPlan.translationRequest("Example text", target: "zh-Hans", model: "", token: "fixture")
         XCTAssertEqual(request.url?.absoluteString, "https://api.openai.com/v1/responses")
