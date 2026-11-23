@@ -63,3 +63,17 @@
 "capture_text.ai_usage_limit" = "已达到 ChatGPT 用量上限，可在 AI 翻译设置里查看额度。";
 "capture_text.ai_service_error" = "ChatGPT 没有返回完整结果，请稍后重试。";
 "capture_text.ai_revocation_failed" = "旧会话已从应用移除。请在 ChatGPT 用量设置中确认旧授权是否已撤销。";
+
+"capture_image.title" = "AI 识图";
+"capture_image.preview" = "将发送的截图预览";
+"capture_image.disclosure" = "点击发送后，当前选区图片和你输入的问题将发送给 %@。";
+"capture_image.configure" = "设置 AI 服务后可以发送当前选区。";
+"capture_image.question" = "想问什么？留空自动识图和解题";
+"capture_image.send" = "发送截图并分析";
+"capture_image.cancel" = "取消分析";
+"capture_image.result" = "分析结果";
+"capture_image.question_limit" = "问题最多 1200 个字符。";
+"capture_image.too_large" = "截图太大。请缩小选区后重试。";
+"capture_image.vision_model" = "自带 API Key 时，请选择支持图片输入的模型。";
+"capture_image.settings" = "AI 服务设置";
+"capture_image.chatgpt_help" = "使用自己的 ChatGPT 套餐额度。点击「发送截图并分析」后才会发送当前选区。";

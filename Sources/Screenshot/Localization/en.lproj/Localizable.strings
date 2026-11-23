@@ -63,3 +63,17 @@
 "capture_text.ai_usage_limit" = "ChatGPT usage limit reached. Open AI Translation Settings to manage usage.";
 "capture_text.ai_service_error" = "ChatGPT did not return a complete result. Try again later.";
 "capture_text.ai_revocation_failed" = "The previous session was removed locally. Check its authorization in ChatGPT usage settings.";
+
+"capture_image.title" = "AI Image Analysis";
+"capture_image.preview" = "Preview of the screenshot to send";
+"capture_image.disclosure" = "Send the selected screenshot and your question to %@.";
+"capture_image.configure" = "Set up an AI service to send the selected screenshot.";
+"capture_image.question" = "Ask about the image, or leave blank for automatic analysis";
+"capture_image.send" = "Send Screenshot and Analyze";
+"capture_image.cancel" = "Cancel Analysis";
+"capture_image.result" = "Analysis";
+"capture_image.question_limit" = "The question must be 1,200 characters or fewer.";
+"capture_image.too_large" = "The screenshot is too large. Select a smaller area and try again.";
+"capture_image.vision_model" = "Choose a model that accepts images when using your own API key.";
+"capture_image.settings" = "AI Service Settings";
+"capture_image.chatgpt_help" = "Use your ChatGPT plan allowance. The selected screenshot is sent only when you click Send Screenshot and Analyze.";

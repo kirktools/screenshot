@@ -20,6 +20,7 @@ enum AITranslationProvider: String {
 struct AITranslationSetup: View {
     @Binding var provider: AITranslationProvider
     @Binding var chatModel: String
+    var forImageAnalysis = false
     let close: () -> Void
     @StateObject private var state = AITranslationSetupState()
 
@@ -28,7 +29,7 @@ struct AITranslationSetup: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label(localized("capture_text.ai_settings"), systemImage: "sparkles").font(.headline)
+                Label(localized(forImageAnalysis ? "capture_image.settings" : "capture_text.ai_settings"), systemImage: "sparkles").font(.headline)
                 Spacer()
                 Button(localized("capture_text.ai_back_to_capture"), action: close)
                     .disabled(state.action == .signIn || state.action == .switchAccount || state.action == .signOut)
@@ -112,7 +113,7 @@ struct AITranslationSetup: View {
 
     private var chatSettings: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(localized("capture_text.ai_chatgpt_help")).foregroundStyle(.secondary)
+            Text(localized(forImageAnalysis ? "capture_image.chatgpt_help" : "capture_text.ai_chatgpt_help")).foregroundStyle(.secondary)
             if let action = state.action {
                 ProgressView(localized(action == .signIn || action == .switchAccount
                                        ? "capture_text.ai_browser"
@@ -176,7 +177,7 @@ struct AITranslationSetup: View {
 
     private var keySettings: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(localized("capture_text.cloud_disclosure")).foregroundStyle(.secondary)
+            Text(localized(forImageAnalysis ? "capture_image.vision_model" : "capture_text.cloud_disclosure")).foregroundStyle(.secondary)
             TextField(localized("capture_text.cloud_url"), text: $state.baseURL)
             TextField(localized("capture_text.cloud_model"), text: $state.model)
             SecureField(localized("capture_text.cloud_key"), text: $state.key)

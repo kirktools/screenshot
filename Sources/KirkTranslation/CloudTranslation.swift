@@ -1,6 +1,6 @@
 import Foundation
 
-/// 接受 OpenAI 兼容的 Chat Completions API 地址。请求只包含 OCR 文本和目标语言。
+/// 使用 OpenAI 兼容的 Chat Completions 接口。
 public struct CloudTranslation {
     public let endpoint: URL
     public let model: String
@@ -48,17 +48,43 @@ public struct CloudTranslation {
 
     public func translate(_ text: String, target: String, apiKey: String, segmentMarker: String? = nil, session: URLSession? = nil, onHeaders: ((Int) -> Void)? = nil) async throws -> String {
         guard text.utf8.count <= 12_000 else { throw Failure.inputTooLong }
-        guard !apiKey.isEmpty else { throw Failure.invalidConfiguration }
         let payload = Payload(model: model, messages: [
             Message(role: "system", content: Self.instructions(target: target, segmentMarker: segmentMarker)),
             Message(role: "user", content: text)
         ])
+        let request = try makeRequest(body: JSONEncoder().encode(payload), apiKey: apiKey)
+        return try await complete(request, session: session, onHeaders: onHeaders)
+    }
+
+    public func analyze(_ analysis: ImageAnalysis, apiKey: String, session: URLSession? = nil,
+                        onHeaders: ((Int) -> Void)? = nil) async throws -> String {
+        let request = try analysisRequest(analysis, apiKey: apiKey)
+        return try await complete(request, session: session, onHeaders: onHeaders)
+    }
+
+    func analysisRequest(_ analysis: ImageAnalysis, apiKey: String) throws -> URLRequest {
+        let payload: [String: Any] = ["model": model, "messages": [
+            ["role": "system", "content": analysis.instructions],
+            ["role": "user", "content": [
+                ["type": "text", "text": analysis.question],
+                ["type": "image_url", "image_url": ["url": analysis.imageURL]]
+            ]]
+        ]]
+        return try makeRequest(body: JSONSerialization.data(withJSONObject: payload), apiKey: apiKey)
+    }
+
+    private func makeRequest(body: Data, apiKey: String) throws -> URLRequest {
+        guard !apiKey.isEmpty else { throw Failure.invalidConfiguration }
         var request = URLRequest(url: endpoint, timeoutInterval: 45)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer " + apiKey, forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONEncoder().encode(payload)
+        request.httpBody = body
+        return request
+    }
 
+    private func complete(_ request: URLRequest, session: URLSession?,
+                          onHeaders: ((Int) -> Void)?) async throws -> String {
         let client = session ?? URLSession(configuration: .ephemeral)
         defer { if session == nil { client.finishTasksAndInvalidate() } }
         let (bytes, response) = try await client.bytes(for: request, delegate: RejectRedirects())
