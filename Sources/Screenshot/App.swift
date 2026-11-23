@@ -75,9 +75,9 @@ struct ScreenPermissionAccess {
     private var scrollShortcutEnabled: Bool { (UserDefaults.standard.object(forKey: "hotkeys.scroll.enabled") as? Bool) ?? true }
     var permissionAccess = ScreenPermissionAccess()
     // 先拍下桌面，再允许选区窗口激活；测试可替换成合成快照，不读取屏幕。
-    var freezeSelection: () async throws -> FrozenCapture = {
+    var freezeSelection: (Set<CGWindowID>) async throws -> FrozenCapture = { includedWindows in
         let provider = MacCaptureProvider()
-        try await provider.prepareForSelection()
+        try await provider.prepareForSelection(including: includedWindows)
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main else {
             throw CaptureError.message("当前没有可捕获的显示器")
         }
@@ -335,12 +335,18 @@ struct ScreenPermissionAccess {
         let frontmost = NSWorkspace.shared.frontmostApplication
         previousApp = frontmost?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? lastExternalApp : frontmost
         settings?.orderOut(nil); editor?.window?.orderOut(nil)
+        let includedWindows: Set<CGWindowID>
+        if !scrolling, let window = updateController?.window, window.isVisible, !window.isMiniaturized, window.windowNumber > 0 {
+            includedWindows = [CGWindowID(window.windowNumber)]
+        } else {
+            includedWindows = []
+        }
         Task { @MainActor [self] in
             do {
                 // 切勿在拍下悬浮提示之前显示选区或激活本应用。
                 timing.mark("freeze.begin")
                 let frozen: FrozenCapture? = try await CaptureTiming.$current.withValue(timing) {
-                    scrolling ? nil : try await freezeSelection()
+                    scrolling ? nil : try await freezeSelection(includedWindows)
                 }
                 timing.mark("freeze.end")
                 let selector = RegionSelector(); self.selector = selector
@@ -372,7 +378,7 @@ struct ScreenPermissionAccess {
                     }
                 }
                 timing.mark("selector.begin")
-                selector.begin(frozenCapture: frozen, timing: timing)
+                selector.begin(frozenCapture: frozen, timing: timing, including: includedWindows)
                 timing.mark("selector.begin_returned")
             } catch {
                 timing.finish("capture_failed")

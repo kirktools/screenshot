@@ -96,6 +96,21 @@ enum UpdatePaths {
     static func isInstalledPath(_ app: URL) -> Bool {
         [destination.path, legacyDestination.path].contains(app.standardizedFileURL.path)
     }
+    static func requireInstallationLocation(_ app: URL, parentWritable: Bool) throws {
+        if app.pathComponents.contains("AppTranslocation") {
+            throw UpdateError("当前运行的是 macOS 隔离启动的副本。请退出当前 Screenshot，再从 Finder 的「应用程序」打开 Screenshot 并重试更新。")
+        }
+        guard isInstalledPath(app) else {
+            throw UpdateError("当前运行的副本不在应用程序文件夹。请退出后从 /Applications/Screenshot.app 打开，再重试更新。")
+        }
+        guard parentWritable else {
+            throw UpdateError("当前用户无法写入 /Applications，应用内更新无法替换安装。请用有权限的账号在 Finder 中安装新版。")
+        }
+    }
+    static func requireInstallationLocation(_ app: URL) throws {
+        try requireInstallationLocation(app, parentWritable:
+            FileManager.default.isWritableFile(atPath: destination.deletingLastPathComponent().path))
+    }
     static var cache: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("com.kirktools.screenshot/Updates", isDirectory: true) }
     static var receipt: URL { cache.appendingPathComponent("last-result.txt") }
 }
@@ -107,10 +122,7 @@ struct PreparedUpdate {
     func clean() { try? FileManager.default.removeItem(at: root) }
     /// 辅助进程复制到缓存，不从即将被替换的旧应用内执行。
     func startHelper(parent: Int32, currentApp: URL) async throws -> Process {
-        guard UpdatePaths.isInstalledPath(currentApp),
-              FileManager.default.isWritableFile(atPath: UpdatePaths.destination.deletingLastPathComponent().path) else {
-            throw UpdateError("请先安装到 /Applications/Screenshot.app，并确保当前用户可写。不会自动使用管理员权限。")
-        }
+        try UpdatePaths.requireInstallationLocation(currentApp)
         if currentApp.standardizedFileURL.path != UpdatePaths.destination.path && FileManager.default.fileExists(atPath: UpdatePaths.destination.path) { throw UpdateError("新旧应用同时存在，请先核对并保留一份。未替换应用。") }
         let helper = root.appendingPathComponent("UpdateInstaller")
         try? FileManager.default.removeItem(at: helper)

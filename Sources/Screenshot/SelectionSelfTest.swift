@@ -48,8 +48,23 @@ import AppKit
     try require(regions == [CGRect(x: -300, y: 150, width: 200, height: 400), CGRect(x: 900, y: 600, width: 100, height: 100)],
                 "窗口过滤、负坐标转换、屏幕边缘裁切或前后顺序不正确：\(regions)")
     try require(WindowPreselection.regions(from: [], excludingPID: 99, screenTop: 800, desktop: desktop).isEmpty, "空窗口列表不能降级")
+    var ownUpdate = data[0]
+    ownUpdate[kCGWindowNumber as String] = 42
+    let ownWindows = WindowPreselection.regions(from: [ownUpdate, data[0]], excludingPID: 99,
+                                                screenTop: 800, desktop: desktop, including: [42])
+    try require(ownWindows == [CGRect(x: 20, y: 670, width: 200, height: 100)],
+                "显式保留更新窗口时，仍须排除其他自身窗口")
     // 菜单栏可低于 32 点，但普通窗口与手动拖选仍保留原最小尺寸。
     let primary = CGRect(x: 0, y: 0, width: 1440, height: 900)
+    let spotlightBounds = CGRect(x: 180, y: 150, width: 680, height: 500)
+    let spotlightLayer = Int(CGWindowLevelForKey(.floatingWindow))
+    let spotlightCandidates = WindowPreselection.regions(
+        from: [entry(primary, pid: 12, layer: spotlightLayer),
+               entry(spotlightBounds, pid: 12, layer: spotlightLayer),
+               entry(spotlightBounds, pid: 13, layer: spotlightLayer),
+               entry(primary)], excludingPID: 99, screenTop: 900, desktop: primary, spotlightPIDs: [12])
+    try require(spotlightCandidates == [CGRect(x: 180, y: 250, width: 680, height: 500), primary],
+                "聚焦浮层未获得预选，或其他高层窗口和聚焦整屏接收层被错误选中")
     let bar = CGRect(x: 0, y: 870, width: 1440, height: 30)
     let menuInfo = [entry(CGRect(x: 0, y: 0, width: 1440, height: 30), layer: Int(CGWindowLevelForKey(.mainMenuWindow)))]
     let menuRegions = WindowPreselection.regions(from: menuInfo, excludingPID: 99, screenTop: 900, desktop: primary)
@@ -174,7 +189,7 @@ import AppKit
     let delegate = AppDelegate()
     delegate.permissionAccess = ScreenPermissionAccess(isAuthorized: { true }, request: { false }, openSettings: {})
     var pending: CheckedContinuation<FrozenCapture, Error>?, captures = 0
-    delegate.freezeSelection = {
+    delegate.freezeSelection = { _ in
         captures += 1
         return try await withCheckedThrowingContinuation { pending = $0 }
     }

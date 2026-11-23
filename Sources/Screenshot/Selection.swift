@@ -3,12 +3,14 @@ import AppKit
 /// Quartz 窗口坐标以主显示器左上为原点；选择器统一使用 AppKit 屏幕点坐标。
 /// 每次唤起只读取一次窗口列表，保持前后顺序；不查询标题或辅助功能树。
 enum WindowPreselection {
-    static func regions(from info: [[String: Any]], excludingPID: Int32, screenTop: CGFloat, desktop: CGRect, screens: [CGRect]? = nil) -> [CGRect] {
+    static func regions(from info: [[String: Any]], excludingPID: Int32, screenTop: CGFloat, desktop: CGRect, screens: [CGRect]? = nil, including windowsToKeep: Set<CGWindowID> = [], spotlightPIDs: Set<Int32> = []) -> [CGRect] {
         let menuLayers = [Int(CGWindowLevelForKey(.mainMenuWindow)), Int(CGWindowLevelForKey(.statusWindow))]
         var menuBars: [CGRect] = []
         var windows: [CGRect] = []
         for entry in info {
-            guard let pid = entry[kCGWindowOwnerPID as String] as? NSNumber, pid.int32Value != excludingPID,
+            let windowID = (entry[kCGWindowNumber as String] as? NSNumber)?.uint32Value
+            guard let pid = entry[kCGWindowOwnerPID as String] as? NSNumber,
+                  pid.int32Value != excludingPID || windowID.map(windowsToKeep.contains) == true,
                   let layer = entry[kCGWindowLayer as String] as? NSNumber,
                   let alpha = entry[kCGWindowAlpha as String] as? NSNumber, alpha.doubleValue > 0,
                   let bounds = entry[kCGWindowBounds as String] as? NSDictionary,
@@ -27,7 +29,12 @@ enum WindowPreselection {
                         menuBars[index] = menuBars[index].union(bar)
                     } else { menuBars.append(bar) }
                 }
-            } else if layer.intValue == 0, rect.width >= 32, rect.height >= 32 {
+            } else {
+                // 聚焦的结果面板是系统浮层，允许其可见窗口进入候选，排除整屏事件接收层。
+                let spotlightPanel = spotlightPIDs.contains(pid.int32Value) && layer.intValue > 0
+                    && layer.intValue < CGWindowLevelForKey(.screenSaverWindow)
+                    && !(screens ?? [desktop]).contains { rect.insetBy(dx: -1, dy: -1).contains($0) }
+                guard (layer.intValue == 0 || spotlightPanel), rect.width >= 32, rect.height >= 32 else { continue }
                 let visible = rect.intersection(desktop)
                 if !visible.isNull, visible.width >= 32, visible.height >= 32 { windows.append(visible.integral) }
             }
@@ -94,7 +101,8 @@ final class SelectionWindow: NSWindow {
     var completion: ((CGRect?) -> Void)?
     private var timing: CaptureTiming?
     func selectionDidDraw() { timing?.mark("selector.first_draw"); timing?.finish("first_draw"); timing = nil }
-    func begin(candidates: [CGRect]? = nil, frozenCapture: FrozenCapture? = nil, timing: CaptureTiming? = nil) {
+    func begin(candidates: [CGRect]? = nil, frozenCapture: FrozenCapture? = nil, timing: CaptureTiming? = nil,
+               including windowsToKeep: Set<CGWindowID> = []) {
         self.timing = timing
         guard windows.isEmpty else { return }
         let screens = NSScreen.screens
@@ -105,8 +113,10 @@ final class SelectionWindow: NSWindow {
         if let candidates { regions = candidates }
         else {
             let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+            let spotlight = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Spotlight")
             regions = WindowPreselection.regions(from: info, excludingPID: ProcessInfo.processInfo.processIdentifier,
-                                                 screenTop: screens.first?.frame.maxY ?? 0, desktop: desktop, screens: screens.map(\.frame))
+                                                 screenTop: screens.first?.frame.maxY ?? 0, desktop: desktop, screens: screens.map(\.frame), including: windowsToKeep,
+                                                 spotlightPIDs: Set(spotlight.map(\.processIdentifier)))
         }
         timing?.mark("selector.window_list_end")
         state = RegionSelectionState(candidates: regions)

@@ -19,7 +19,9 @@ import AppKit
         super.init(window: window); window.delegate = self
         let title = NSTextField(labelWithString: "更新 Screenshot")
         title.font = .systemFont(ofSize: 20, weight: .semibold)
-        status.maximumNumberOfLines = 5; status.lineBreakMode = .byTruncatingTail
+        status.maximumNumberOfLines = 5; status.lineBreakMode = .byWordWrapping
+        status.preferredMaxLayoutWidth = 462
+        status.setContentCompressionResistancePriority(.required, for: .vertical)
         let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知"
         let version = NSTextField(labelWithString: "当前版本 \(current) · 仅检查 GitHub 正式 Release")
         version.textColor = .secondaryLabelColor
@@ -68,6 +70,13 @@ import AppKit
         if let prepared { install(prepared); return }
         guard let offer else { check(); return }
         guard canInstall() else { status.stringValue = "请先完成或取消当前截图，再进行更新。"; return }
+        do {
+            try UpdatePaths.requireInstallationLocation(Bundle.main.bundleURL)
+        } catch {
+            status.stringValue = error.localizedDescription
+            idle("重试更新")
+            return
+        }
         working("正在下载并校验更新，请勿移动当前应用…")
         task = Task { [weak self] in
             guard let self else { return }

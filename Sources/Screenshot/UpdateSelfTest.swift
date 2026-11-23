@@ -25,6 +25,19 @@ func makeUpdateFixture(in root: URL) throws -> URL {
 }
 
 @MainActor func runUpdateSelfTest() throws {
+    try UpdatePaths.requireInstallationLocation(UpdatePaths.destination, parentWritable: true)
+    for (path, writable, expected) in [
+        (URL(fileURLWithPath: "/tmp/AppTranslocation/fixture/d/Screenshot.app"), true, "隔离启动"),
+        (URL(fileURLWithPath: "/tmp/Screenshot.app"), true, "不在应用程序文件夹"),
+        (UpdatePaths.destination, false, "无法写入")
+    ] {
+        do {
+            try UpdatePaths.requireInstallationLocation(path, parentWritable: writable)
+            throw CaptureError.message("更新位置检查接受了不支持的安装路径")
+        } catch let error as UpdateError {
+            try updateRequire(error.localizedDescription.contains(expected), "更新位置错误没有区分具体原因")
+        }
+    }
     let delegate = AppDelegate()
     var permissionChecks = 0
     delegate.permissionAccess = ScreenPermissionAccess(isAuthorized: { permissionChecks += 1; return false }, request: { false }, openSettings: {})

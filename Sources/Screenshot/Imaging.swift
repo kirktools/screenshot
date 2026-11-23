@@ -53,10 +53,14 @@ enum CaptureError: LocalizedError {
         NSScreen.screens.map { "\($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] ?? ""):\($0.frame):\($0.backingScaleFactor)" }.joined(separator: ";")
     }
     static func invalidateSelectionContent() { recentContent = nil }
-    func prepareForSelection() async throws {
+    private var includedWindows: Set<CGWindowID> = []
+
+    func prepareForSelection(including windows: Set<CGWindowID> = []) async throws {
+        includedWindows = windows
         CaptureTiming.current?.mark("metadata.begin")
         let now = ProcessInfo.processInfo.systemUptime
-        if let cached = Self.recentContent, cached.layout == Self.layout, now - cached.time < 30 {
+        if let cached = Self.recentContent, cached.layout == Self.layout, now - cached.time < 30,
+           windows.isEmpty || windows.isSubset(of: Set(cached.value.windows.map(\.windowID))) {
             CaptureTiming.current?.mark("metadata.cache_hit")
             CaptureTiming.current?.mark("metadata.end")
             content = cached.value
@@ -129,7 +133,12 @@ enum CaptureError: LocalizedError {
             throw CaptureError.message("截图区域过大，或内存不足，请缩小区域")
         }
         // 跨屏空隙透明；低分辨率屏幕按最高 backingScale 归一化。
-        let excluded = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        let excluded = content.applications.filter { $0.processID == ownPID }
+        // 例外会反转应用的包含规则，只有自身确实被排除时才添加。
+        let exceptions = excluded.isEmpty ? [] : content.windows.filter {
+            includedWindows.contains($0.windowID) && $0.owningApplication?.processID == ownPID
+        }
         for screen in screens {
             guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
                   screenSnapshot[id] == screen.frame,
@@ -141,7 +150,7 @@ enum CaptureError: LocalizedError {
             config.sourceRect = CGRect(x: part.minX - screen.frame.minX, y: screen.frame.maxY - part.maxY, width: part.width, height: part.height)
             config.width = Int((part.width * scale).rounded()); config.height = Int((part.height * scale).rounded())
             config.showsCursor = false; config.scalesToFit = true
-            let filter = SCContentFilter(display: display, excludingApplications: excluded, exceptingWindows: [])
+            let filter = SCContentFilter(display: display, excludingApplications: excluded, exceptingWindows: exceptions)
             CaptureTiming.current?.mark("screen.capture_begin")
             let shot = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
             CaptureTiming.current?.mark("screen.capture_end")
