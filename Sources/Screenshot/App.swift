@@ -1,5 +1,7 @@
 import AppKit
 import Carbon
+import KirkLogging
+import UniformTypeIdentifiers
 
 enum ApplicationFlavor {
     static func isDevelopment(_ identifier: String?) -> Bool { identifier == "com.kirktools.screenshot.dev" }
@@ -34,6 +36,14 @@ enum AppLocalization {
         guard let licenseURL = Bundle.main.resourceURL?.appendingPathComponent("LICENSE.txt"),
               let license = try? String(contentsOf: licenseURL, encoding: .utf8),
               license.hasPrefix("MIT License"), license.contains("Permission is hereby granted"), license.contains("kirktools") else { throw CaptureError.message("安装包缺少完整的 MIT 许可证") }
+        guard let resources = Bundle.main.resourceURL,
+              FileManager.default.fileExists(atPath: resources.appendingPathComponent("CocoaLumberjack_CocoaLumberjack.bundle/PrivacyInfo.xcprivacy").path)
+        else { throw CaptureError.message("安装包缺少日志依赖的隐私清单") }
+        for name in ["KirkLogging", "KirkTranslation", "CocoaLumberjack", "swift-log"] {
+            let url = resources.appendingPathComponent("ThirdPartyLicenses/\(name).txt")
+            guard let license = try? Data(contentsOf: url), !license.isEmpty
+            else { throw CaptureError.message("安装包缺少依赖许可证：\(name)") }
+        }
         guard localized("capture.normal") != "capture.normal" else { throw CaptureError.message("菜单语言资源加载失败") }
     }
 }
@@ -182,6 +192,7 @@ struct ScreenPermissionAccess {
             }
             return
         }
+        UpdateRelaunchResult.from(arguments: CommandLine.arguments)?.record()
         lastExternalApp = NSWorkspace.shared.frontmostApplication
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             guard let running = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication, running.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
@@ -324,7 +335,7 @@ struct ScreenPermissionAccess {
         guard !busy && !installingUpdate else { timing.finish("busy"); return }
         timing.mark("permission.begin")
         guard permissionAccess.isAuthorized() else {
-            timing.finish("permission_required")
+            timing.finish("permission_required", error: "permission_required", level: .warning)
             // 明确按下截图键就直接请求系统，不在桌面叠加自建权限提示。
             // 仅合并尚在调度的请求；不启动计时重试或自动打开任何设置。
             requestScreenPermission()
@@ -381,7 +392,7 @@ struct ScreenPermissionAccess {
                 selector.begin(frozenCapture: frozen, timing: timing, including: includedWindows)
                 timing.mark("selector.begin_returned")
             } catch {
-                timing.finish("capture_failed")
+                timing.finish("capture_failed", error: "capture_failed")
                 self.busy = false
                 showError(CaptureError.message("\(error.localizedDescription)\n若刚授予屏幕录制权限，请退出应用后重新打开。"))
             }
@@ -523,13 +534,24 @@ struct ScreenPermissionAccess {
         status.textColor = .secondaryLabelColor; views.append(status)
         let hotkeyStatus = NSTextField(wrappingLabelWithString: "")
         hotkeyStatusLabel = hotkeyStatus; views.append(hotkeyStatus)
-        let diagnostics = NSButton(checkboxWithTitle: "记录本机诊断日志", target: self, action: #selector(toggleCaptureTiming(_:)))
-        diagnostics.state = CaptureTiming.enabled ? .on : .off
-        views.append(diagnostics)
-        let diagnosticHelp = NSTextField(wrappingLabelWithString: "记录截图与 AI 翻译耗时，以及 ChatGPT 模型列表请求状态，不记录图片、文字或授权凭据，不上传。关闭后保留已有记录，最多约 2 MB。")
+        let diagnostics = NSPopUpButton(frame: .zero, pullsDown: false)
+        diagnostics.addItems(withTitles: CaptureTiming.Level.allCases.map(\.title))
+        diagnostics.selectItem(withTitle: CaptureTiming.level.title)
+        diagnostics.setAccessibilityLabel("本机诊断等级")
+        diagnostics.target = self
+        diagnostics.action = #selector(changeCaptureTimingLevel(_:))
+        let diagnosticLevel = NSStackView(views: [NSTextField(labelWithString: "本机诊断等级"), diagnostics])
+        diagnosticLevel.spacing = 12
+        diagnosticLevel.alignment = .centerY
+        views.append(diagnosticLevel)
+        let diagnosticHelp = NSTextField(wrappingLabelWithString: "平时可只记录警告和错误。排查卡顿时选择「详细阶段」。日志仅保留在本机，关闭后保留已有记录。")
         diagnosticHelp.textColor = .secondaryLabelColor
         views.append(diagnosticHelp)
-        let diagnosticActions = NSStackView(views: [NSButton(title: "打开日志目录", target: self, action: #selector(openTimingLogs)), NSButton(title: "清除诊断记录", target: self, action: #selector(clearTimingLogs))])
+        let diagnosticActions = NSStackView(views: [
+            NSButton(title: "打开日志目录", target: self, action: #selector(openTimingLogs)),
+            NSButton(title: "导出诊断…", target: self, action: #selector(exportTimingLogs)),
+            NSButton(title: "清除诊断记录", target: self, action: #selector(clearTimingLogs))
+        ])
         diagnosticActions.spacing = 12; views.append(diagnosticActions)
         let version = NSTextField(labelWithString: "版本 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版") · macOS 14+ · MIT © kirktools")
         version.textColor = .secondaryLabelColor
@@ -549,20 +571,57 @@ struct ScreenPermissionAccess {
         scrollRecorder?.isEnabled = scrollShortcutEnabled
         hotkeyWarnings.removeAll(); registerTools(); refreshMenu(); refreshSettingsStatus()
     }
-    @objc private func toggleCaptureTiming(_ sender: NSButton) {
-        UserDefaults.standard.set(sender.state == .on, forKey: "diagnostics.captureTiming")
+    @objc private func changeCaptureTimingLevel(_ sender: NSPopUpButton) {
+        guard let level = CaptureTiming.Level.allCases.first(where: { $0.title == sender.titleOfSelectedItem }) else { return }
+        CaptureTiming.setLevel(level)
     }
+
     @objc private func openTimingLogs() {
-        do {
-            try FileManager.default.createDirectory(at: CaptureTiming.directory, withIntermediateDirectories: true)
-            NSWorkspace.shared.open(CaptureTiming.directory)
-        } catch { showError(error) }
+        do { NSWorkspace.shared.open(try CaptureTiming.log().directory) }
+        catch { showError(CaptureError.message("无法打开诊断日志目录。")) }
     }
+
+    @objc private func exportTimingLogs() {
+        let sources: [(String, StaticString?)] = [
+            ("全部来源", nil),
+            ("区域截图快捷键", "hotkey.normal"), ("长截图快捷键", "hotkey.scroll"),
+            ("区域截图菜单", "action.normal"), ("长截图菜单", "action.scroll"),
+            ("滚动长截图", "capture.scrolling"), ("GIF 录制", "capture.gif"),
+            ("文字识别", "translation.ocr"), ("本机翻译", "translation.system"),
+            ("ChatGPT 翻译", "translation.chatgpt"), ("ChatGPT 网络耗时", "translation.chatgpt.network"),
+            ("ChatGPT 模型列表", "translation.chatgpt.models"), ("API Key 翻译", "translation.api_key"),
+            ("原文与译文对齐", "translation.alignment"), ("AI 识图", "image.analysis"),
+            ("检查更新", "update.check"), ("下载更新", "update.download"), ("安装更新", "update.install")
+        ]
+        let source = NSPopUpButton(frame: .zero, pullsDown: false)
+        source.addItems(withTitles: sources.map { $0.0 })
+        source.setAccessibilityLabel("诊断来源")
+        let failures = NSButton(checkboxWithTitle: "仅导出警告及错误", target: nil, action: nil)
+        let filters = NSStackView(views: [source, failures])
+        filters.spacing = 12
+        filters.alignment = .centerY
+        filters.frame.size = filters.fittingSize
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "Screenshot-Diagnostics.json"
+        panel.accessoryView = filters
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let filter = DiagnosticFilter(module: sources[source.indexOfSelectedItem].1,
+                                      levels: failures.state == .on ? [.warning, .error] : [])
+        Task {
+            do {
+                let count = try await CaptureTiming.log().export(to: url, matching: filter)
+                let alert = NSAlert()
+                alert.messageText = "已导出 \(count) 条诊断记录"
+                alert.runModal()
+            } catch { showError(CaptureError.message("无法导出诊断记录，请检查日志目录和目标文件的写入权限。")) }
+        }
+    }
+
     @objc private func clearTimingLogs() {
-        CaptureTiming.clear { success in
-            Task { @MainActor in
-                if !success { showError(CaptureError.message("无法清除诊断记录，请检查日志目录的写入权限。")) }
-            }
+        Task {
+            do { try await CaptureTiming.log().clear() }
+            catch { showError(CaptureError.message("无法清除诊断记录，请检查日志目录的写入权限。")) }
         }
     }
     private func refreshSettingsStatus() {
@@ -603,6 +662,13 @@ struct ScreenPermissionAccess {
             do { try AppLocalization.verifyPackagedResources(); print("PACKAGED RESOURCES PASSED") }
             catch { fputs("PACKAGED RESOURCES FAILED: \(error)\n", stderr); exit(1) }
             return
+        }
+        if CommandLine.arguments.contains("--diagnostics-self-test") {
+            Task {
+                do { try await runDiagnosticsSelfTest(); exit(0) }
+                catch { fputs("DIAGNOSTICS SELF-TEST FAILED: \(error)\n", stderr); exit(1) }
+            }
+            dispatchMain()
         }
         let app = NSApplication.shared
         let delegate = AppDelegate()

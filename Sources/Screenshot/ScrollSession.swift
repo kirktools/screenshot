@@ -100,6 +100,7 @@ private final class ScrollPreviewCanvas: NSView {
     private var automaticRecovery = false
     private var stopped: Bool { lifecycle.isStopped }
     private var started = false
+    private var timing: CaptureTiming?
     private let captureLimits = LongCaptureLimits()
     private var memoryBytes = 0
     private let boundary: CaptureBoundary
@@ -240,10 +241,12 @@ private final class ScrollPreviewCanvas: NSView {
 
     func start(registerHotkeys: Bool = true, showPanel: Bool = true) -> Bool {
         guard !started, !stopped else { return false }
+        let timing = CaptureTiming(source: "capture.scrolling")
         if registerHotkeys {
-            guard hotkeys.register("session.finish", shortcut: Shortcut(key: 36, modifiers: 0, label: "↩"), action: { [weak self] in self?.finishCapture() }) else { return false }
-            guard hotkeys.register("session.cancel", shortcut: Shortcut(key: 53, modifiers: 0, label: "Esc"), action: { [weak self] in self?.cancelCapture() }) else { hotkeys.unregister("session.finish"); return false }
+            guard hotkeys.register("session.finish", shortcut: Shortcut(key: 36, modifiers: 0, label: "↩"), action: { [weak self] in self?.finishCapture() }) else { timing.finish("failed", error: "hotkey_registration"); return false }
+            guard hotkeys.register("session.cancel", shortcut: Shortcut(key: 53, modifiers: 0, label: "Esc"), action: { [weak self] in self?.cancelCapture() }) else { hotkeys.unregister("session.finish"); timing.finish("failed", error: "hotkey_registration"); return false }
         }
+        self.timing = timing
         started = true; showsUI = showPanel
         if showPanel { boundary.show(); panel.orderFrontRegardless() }
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
@@ -278,6 +281,7 @@ private final class ScrollPreviewCanvas: NSView {
                 guard !self.stopped, !Task.isCancelled else { await source.stop(); return }
                 try await source.start()
                 if self.stopped || Task.isCancelled { await source.stop(); return }
+                self.timing?.mark("stream.ready")
                 for try await frame in source.frames {
                     guard !self.stopped, !Task.isCancelled else { break }
                     guard !self.paused || self.automaticRecovery else { continue }
@@ -290,6 +294,7 @@ private final class ScrollPreviewCanvas: NSView {
                 await source.stop()
             } catch {
                 if !self.stopped {
+                    if !Task.isCancelled { self.timing?.mark("stream.failed", error: "capture_failed") }
                     self.pending = true
                     self.pause("捕获失败：\(error.localizedDescription)。请检查权限或重新框选。")
                 }
@@ -432,10 +437,12 @@ private final class ScrollPreviewCanvas: NSView {
                 self.pause("末尾仍有未能接续的画面。再次按回车仅导出已确认部分，或回滚后重试。")
                 return
             }
+            self.timing?.mark("compose.begin")
             let retained = self.displayPieces
             let image = await self.composeImage(retained)
             guard !self.stopped else { return }
             guard let image else {
+                self.timing?.mark("compose.failed", error: "composition_failed")
                 self.lifecycle.resumeCapture()
                 self.pause("暂时无法生成长图，已有内容仍保留。可撤销一段或取消。")
                 return
@@ -443,13 +450,15 @@ private final class ScrollPreviewCanvas: NSView {
             guard self.lifecycle.authorizeCommit(generation: finishGeneration) else { return }
             if action != .edit {
                 do { try image.copyPNG(to: self.clipboard) }
-                catch { self.lifecycle.outputFailed(); self.pause("复制失败：\(error.localizedDescription)。可再次完成或选择编辑。"); return }
+                catch { self.timing?.mark("output.failed", error: "clipboard_failed"); self.lifecycle.outputFailed(); self.pause("复制失败：\(error.localizedDescription)。可再次完成或选择编辑。"); return }
             }
+            self.timing?.finish("success")
             self.stop(); self.completion?(image, action)
         }
     }
     @objc func cancelCapture() { guard !stopped else { return }; stop(); completion?(nil, .copy) }
     private func stop() {
+        timing?.finish("cancelled"); timing = nil
         lifecycle.stop()
         task?.cancel(); task = nil
         watchdog?.cancel(); watchdog = nil

@@ -46,7 +46,7 @@ struct Shortcut: Codable, Equatable {
                 let name = registry.ids.first(where: { $0.value == id.id })?.key ?? ""
                 if name == "screenshot.region" || name == "screenshot.scroll" {
                     let timing = CaptureTiming(source: name == "screenshot.region" ? "hotkey.normal" : "hotkey.scroll")
-                    timing.mark("hotkey.callback", value: max(0, GetCurrentEventTime() - GetEventTime(event)) * 1000)
+                    timing.mark("hotkey.callback", elapsedMS: max(0, GetCurrentEventTime() - GetEventTime(event)) * 1000)
                     CaptureTiming.$current.withValue(timing) { registry.actions[id.id]?() }
                 } else { registry.actions[id.id]?() }
             }

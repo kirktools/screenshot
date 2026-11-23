@@ -25,6 +25,15 @@ func makeUpdateFixture(in root: URL) throws -> URL {
 }
 
 @MainActor func runUpdateSelfTest() throws {
+    let operationID = UUID()
+    let result = UpdateRelaunchResult(operationID: operationID, outcome: .recoveryFailed)
+    let command = ["Screenshot"] + result.launchArguments.dropFirst()
+    let decoded = UpdateRelaunchResult.from(arguments: command)
+    try updateRequire(decoded?.operationID == operationID && decoded?.outcome == .recoveryFailed && decoded?.notice != nil,
+                      "更新结果的启动交接没有保留分类或操作编号")
+    try updateRequire(UpdateRelaunchResult.from(arguments: command + ["unexpected"]) == nil
+                      && UpdateRelaunchResult.from(arguments: ["Screenshot", "--update-result", operationID.uuidString, "raw error"]) == nil,
+                      "更新结果接受了不支持的参数")
     try UpdatePaths.requireInstallationLocation(UpdatePaths.destination, parentWritable: true)
     for (path, writable, expected) in [
         (URL(fileURLWithPath: "/tmp/AppTranslocation/fixture/d/Screenshot.app"), true, "隔离启动"),

@@ -7,7 +7,7 @@ configuration=${CONFIGURATION:-release}
 mkdir -p "$PWD/.build/cache/clang" "$PWD/.build/cache/swiftpm"
 export CLANG_MODULE_CACHE_PATH="$PWD/.build/cache/clang"
 export SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.build/cache/clang"
-build_flags=(--cache-path "$PWD/.build/cache/swiftpm")
+build_flags=(--cache-path "$PWD/.build/cache/swiftpm" --force-resolved-versions)
 # 编译产物使用固定的虚拟源码根目录，不嵌入本机用户名和工作区位置。
 build_flags+=(-Xswiftc -file-prefix-map -Xswiftc "$PWD=/screenshot"
               -Xswiftc -debug-prefix-map -Xswiftc "$PWD=/screenshot"
@@ -26,7 +26,8 @@ if [[ "${SCREENSHOT_BUILD_DEMO:-0}" == 1 && "$variant" != development ]]; then
 fi
 export SCREENSHOT_VARIANT="$variant"
 if [[ -n "${SCREENSHOT_BUILD_SCRATCH:-}" ]]; then build_flags+=(--scratch-path "$SCREENSHOT_BUILD_SCRATCH"); fi
-app="${SCREENSHOT_APP_OUTPUT_DIR:-$PWD/dist}/$app_name.app"
+output_dir="${SCREENSHOT_APP_OUTPUT_DIR:-$PWD/dist}"
+app="$output_dir/$app_name.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 if [[ "${UNIVERSAL:-0}" == 1 ]]; then
   package_inputs=$(mktemp -d "$PWD/.build/package-inputs.XXXXXX")
@@ -57,6 +58,17 @@ for path in [app/'Contents/MacOS/KirkScreenshot', app/'Contents/Resources/KirkSc
     elif path.is_dir(): shutil.rmtree(path)
 PYTHON
 cp -R "$resource" "$app/Contents/Resources/"
+logging_resource="$bin_path/CocoaLumberjack_CocoaLumberjack.bundle"
+[[ -f "$logging_resource/PrivacyInfo.xcprivacy" ]] || { echo '构建缺少日志依赖的隐私清单' >&2; exit 1; }
+ditto "$logging_resource" "$app/Contents/Resources/CocoaLumberjack_CocoaLumberjack.bundle"
+
+checkouts="${SCREENSHOT_BUILD_SCRATCH:-$PWD/.build}/checkouts"
+licenses="$app/Contents/Resources/ThirdPartyLicenses"
+mkdir -p "$licenses"
+install -m 644 "$checkouts/pkg-logging/LICENSE" "$licenses/KirkLogging.txt"
+install -m 644 "$checkouts/pkg-translation/LICENSE" "$licenses/KirkTranslation.txt"
+install -m 644 "$checkouts/CocoaLumberjack/LICENSE" "$licenses/CocoaLumberjack.txt"
+install -m 644 "$checkouts/swift-log/LICENSE.txt" "$licenses/swift-log.txt"
 
 cp Resources/Info.plist "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $bundle_id" "$app/Contents/Info.plist"
@@ -99,9 +111,9 @@ else
   python3 scripts/check-development-boundary.py "$app"
 fi
 if [[ "${SCREENSHOT_SKIP_PACKAGING:-0}" != 1 ]]; then
-  ditto -c -k --sequesterRsrc --keepParent "$app" "$PWD/dist/Screenshot-$version-macOS.zip"
+  ditto -c -k --sequesterRsrc --keepParent "$app" "$output_dir/Screenshot-$version-macOS.zip"
   scripts/package-dmg.sh
-  python3 scripts/check-public-content.py --app "$app" --zip "$PWD/dist/Screenshot-$version-macOS.zip"
+  python3 scripts/check-public-content.py --app "$app" --zip "$output_dir/Screenshot-$version-macOS.zip"
 else
   python3 scripts/check-public-content.py --app "$app"
 fi

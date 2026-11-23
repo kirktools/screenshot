@@ -54,6 +54,7 @@ typealias GIFCaptureProvider = MacCaptureProvider
     private var frames: [GIFFrame] = []
     private var bytes = 0
     private var started: Double = 0
+    private var timing: CaptureTiming?
     var completion: ((Data?) -> Void)?
     init(provider: GIFCaptureProvider, region: CGRect, hotkeys: HotkeyRegistry) {
         self.provider = provider; self.region = region; self.hotkeys = hotkeys
@@ -101,6 +102,7 @@ typealias GIFCaptureProvider = MacCaptureProvider
     }
     @objc private func startRecording() {
         guard !recording, !finished else { return }; recording = true; started = ProcessInfo.processInfo.systemUptime
+        timing = CaptureTiming(source: "capture.gif")
         status.stringValue = "正在准备采集…"
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -123,6 +125,7 @@ typealias GIFCaptureProvider = MacCaptureProvider
                 guard !finished else { await source.stop(); return }
                 try await source.start()
                 guard !finished else { await source.stop(); return }
+                timing?.mark("stream.ready")
                 var last = -Double.infinity
                 for try await frame in source.frames {
                     guard !finished, !Task.isCancelled else { break }
@@ -133,7 +136,12 @@ typealias GIFCaptureProvider = MacCaptureProvider
                     frames.append(encoded); bytes += encoded.data.count; last = frame.time
                 }
                 await source.stop()
-            } catch { if !finished { cancelRecording(); showError(error) } }
+            } catch {
+                if !finished {
+                    timing?.finish("failed", error: "capture_failed")
+                    cancelRecording(); showError(error)
+                }
+            }
         }
     }
     private func closeCapture() {
@@ -144,6 +152,7 @@ typealias GIFCaptureProvider = MacCaptureProvider
     }
     @objc private func cancelRecording() {
         guard !finished else { return }; finished = true; closeCapture()
+        timing?.finish("cancelled")
         let source = stream; stream = nil; frames.removeAll()
         Task { await source?.stop(); completion?(nil) }
     }
@@ -151,13 +160,20 @@ typealias GIFCaptureProvider = MacCaptureProvider
         guard recording, !finished else { return }; finished = true
         let end = ProcessInfo.processInfo.systemUptime, captured = frames
         closeCapture(); frames.removeAll()
+        timing?.mark("encode.begin")
         status.stringValue = "正在编码 GIF，请稍候…"; panel.orderFrontRegardless()
         let source = stream; stream = nil
         Task {
             await source?.stop()
             defer { panel.orderOut(nil); panel.close() }
-            do { let data = try await Task.detached { try GIFEncoding.encode(captured, end: end) }.value; completion?(data) }
-            catch { completion?(nil); showError(error) }
+            do {
+                let data = try await Task.detached { try GIFEncoding.encode(captured, end: end) }.value
+                timing?.finish("success")
+                completion?(data)
+            } catch {
+                timing?.finish("failed", error: "encoding_failed")
+                completion?(nil); showError(error)
+            }
         }
     }
 }

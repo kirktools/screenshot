@@ -106,7 +106,7 @@ final class SelectionWindow: NSWindow {
         self.timing = timing
         guard windows.isEmpty else { return }
         let screens = NSScreen.screens
-        guard !screens.isEmpty else { timing?.finish("no_displays"); self.timing = nil; let callback = completion; completion = nil; callback?(nil); return }
+        guard !screens.isEmpty else { timing?.finish("no_displays", error: "no_displays"); self.timing = nil; let callback = completion; completion = nil; callback?(nil); return }
         self.frozenCapture = frozenCapture
         let desktop = screens.reduce(CGRect.null) { $0.union($1.frame) }
         let regions: [CGRect]

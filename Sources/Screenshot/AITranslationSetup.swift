@@ -97,13 +97,23 @@ struct AITranslationSetup: View {
             let models = try await plan.models { event in
                 switch event {
                 case .sessionReady: timing.mark("session.ready")
-                case .httpStatus(let status): timing.mark("http.status", value: Double(status))
-                case .bodyBytes(let count): timing.mark("http.body_bytes", value: Double(count))
-                case .bodyShape(let shape): timing.mark("http.body." + shape.rawValue)
+                case .httpStatus(let status): timing.httpStatus(status)
+                case .bodyBytes: break
+                case .bodyShape(let shape):
+                    switch shape {
+                    case .chatGPTCatalog: timing.mark("http.body.chatgpt_catalog")
+                    case .standardCatalog: timing.mark("http.body.standard_catalog")
+                    case .errorObject: timing.mark("http.body.error_object")
+                    case .otherJSON: timing.mark("http.body.other_json")
+                    case .nonJSON: timing.mark("http.body.non_json")
+                    }
                 }
             }
-            timing.mark("models.count", value: Double(models.count))
-            timing.finish(models.isEmpty ? "empty_catalog" : "success")
+            if models.isEmpty {
+                timing.finish("empty_catalog", error: "empty_catalog", level: .warning)
+            } else {
+                timing.finish("success")
+            }
             return models
         } catch {
             Self.recordFailure(error, timing: timing)
@@ -201,29 +211,46 @@ struct AITranslationSetup: View {
             timing.finish("cancelled")
             return
         }
-        let code: String
+        let code: StaticString
         switch error {
         case let http as ChatGPTPlan.HTTPFailure:
-            timing.mark("failure.http_status", value: Double(http.status))
-            code = http.reason.rawValue
+            timing.httpStatus(http.status)
+            code = diagnosticCode(for: http.reason)
         case let failure as ChatGPTPlan.Failure:
-            code = failure.rawValue
+            code = diagnosticCode(for: failure)
         case let failure as CloudTranslation.Failure:
             switch failure {
             case .denied(let status):
-                timing.mark("failure.http_status", value: Double(status))
+                timing.httpStatus(status)
                 code = "http_denied"
             case .invalidResponse: code = "invalid_response"
             case .invalidConfiguration: code = "invalid_configuration"
             case .inputTooLong: code = "input_too_long"
             }
         case let network as URLError:
-            timing.mark("failure.url_error", value: Double(network.errorCode))
             code = network.code == .timedOut ? "network_timeout" : "network_error"
         default:
             code = "unexpected_error"
         }
         timing.finish("failed", error: code)
+    }
+
+    private static func diagnosticCode(for failure: ChatGPTPlan.Failure) -> StaticString {
+        switch failure {
+        case .invalidAuthorization: return "invalid_authorization"
+        case .signInTimedOut: return "sign_in_timeout"
+        case .signInRequired: return "sign_in_required"
+        case .accessDenied: return "access_denied"
+        case .busy: return "busy"
+        case .usageLimit: return "usage_limit"
+        case .unavailable: return "unavailable"
+        case .invalidResponse: return "invalid_response"
+        case .revocationFailed: return "revocation_failed"
+        case .noModels: return "no_models"
+        case .keychainUnavailable: return "keychain_unavailable"
+        case .invalidModelCatalog: return "invalid_model_catalog"
+        case .sessionStorageUnavailable: return "session_storage_unavailable"
+        }
     }
 
     static func message(for error: Error) -> String {

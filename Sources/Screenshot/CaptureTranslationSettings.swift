@@ -7,7 +7,9 @@ enum CaptureTranslationSettings {
     private static let modelKey = "capture.translation.cloud.model"
     private static let service = (Bundle.main.bundleIdentifier ?? "com.kirktools.screenshot") + ".translation"
 
-    @MainActor static let chatGPT = ChatGPTPlan(service: service)
+    @MainActor static let chatGPT = ChatGPTPlan(
+        service: service, applicationName: "Screenshot", hostPreferenceKey: "capture.translation.chatgpt.host"
+    )
 
     static var initialProvider: AITranslationProvider { baseURL.isEmpty ? .chatGPT : .apiKey }
     static var baseURL: String { UserDefaults.standard.string(forKey: urlKey) ?? "" }

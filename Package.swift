@@ -8,9 +8,16 @@ let buildDocumentationDemo = ProcessInfo.processInfo.environment["SCREENSHOT_BUI
 let package = Package(
     name: "Screenshot", defaultLocalization: "zh-Hans", platforms: [.macOS(.v14)],
     products: [.library(name: "StitchCore", targets: ["StitchCore"]), .executable(name: "Screenshot", targets: ["Screenshot"])],
+    dependencies: [
+        .package(url: "https://github.com/kirktools/pkg-logging.git", exact: "0.1.0"),
+        .package(url: "https://github.com/kirktools/pkg-translation.git", exact: "0.1.0"),
+    ],
     targets: [.target(name: "StitchCore"),
-              .target(name: "KirkTranslation"),
-              .executableTarget(name: "Screenshot", dependencies: ["StitchCore", "KirkTranslation"], exclude: buildDocumentationDemo ? [] : ["Development"], resources: [.process("Localization")], swiftSettings: buildDocumentationDemo ? [.define("SCREENSHOT_DOCUMENTATION_DEMO")] : []),
-              .testTarget(name: "StitchCoreTests", dependencies: ["StitchCore"]),
-              .testTarget(name: "KirkTranslationTests", dependencies: ["KirkTranslation"])],
+              .executableTarget(name: "Screenshot", dependencies: [
+                  "StitchCore",
+                  .product(name: "KirkLogging", package: "pkg-logging"),
+                  .product(name: "KirkTranslation", package: "pkg-translation"),
+                  .product(name: "KirkTranslationUI", package: "pkg-translation"),
+              ], exclude: buildDocumentationDemo ? [] : ["Development"], resources: [.process("Localization")], swiftSettings: buildDocumentationDemo ? [.define("SCREENSHOT_DOCUMENTATION_DEMO")] : []),
+              .testTarget(name: "StitchCoreTests", dependencies: ["StitchCore"])],
     swiftLanguageModes: [.v5])

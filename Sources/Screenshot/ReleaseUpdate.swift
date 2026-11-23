@@ -2,8 +2,13 @@ import Foundation
 
 struct UpdateError: LocalizedError {
     let message: String
+    let requiresManualRecovery: Bool
     var errorDescription: String? { message }
-    init(_ message: String) { self.message = message }
+
+    init(_ message: String, requiresManualRecovery: Bool = false) {
+        self.message = message
+        self.requiresManualRecovery = requiresManualRecovery
+    }
 }
 
 /// 与平台安装逻辑分开，后续 Windows 可复用版本及 Release 选择规则。

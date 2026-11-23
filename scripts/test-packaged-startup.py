@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """从 ZIP 解压验证安装版资源，避免构建目录掩盖资源路径错误。"""
+import argparse
 import pathlib
 import shutil
 import subprocess
@@ -7,9 +8,12 @@ import tempfile
 
 root = pathlib.Path(__file__).resolve().parent.parent
 version = (root / "VERSION").read_text().strip()
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--archive', type=pathlib.Path, default=root / 'dist' / f'Screenshot-{version}-macOS.zip')
+args = parser.parse_args()
 with tempfile.TemporaryDirectory(prefix="screenshot-install-test-") as directory:
     folder = pathlib.Path(directory)
-    subprocess.run(["ditto", "-x", "-k", str(root / "dist" / f"Screenshot-{version}-macOS.zip"), directory], check=True)
+    subprocess.run(["ditto", "-x", "-k", str(args.archive.resolve()), directory], check=True)
     app = folder / "Screenshot.app"
     binary = app / "Contents/MacOS/Screenshot"
     subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
@@ -24,6 +28,13 @@ with tempfile.TemporaryDirectory(prefix="screenshot-install-test-") as directory
     result = subprocess.run([str(binary), '--packaged-resources-test'], cwd=directory, capture_output=True, text=True, timeout=20)
     assert result.returncode == 1 and "缺少完整的 MIT 许可证" in result.stderr, result
     license_file.write_bytes(expected_license)
+    privacy_manifest = app / "Contents/Resources/CocoaLumberjack_CocoaLumberjack.bundle/PrivacyInfo.xcprivacy"
+    data = privacy_manifest.read_bytes()
+    privacy_manifest.unlink()
+    result = subprocess.run([str(binary), "--packaged-resources-test"], cwd=directory, capture_output=True, text=True, timeout=20)
+    assert result.returncode == 1 and "缺少日志依赖的隐私清单" in result.stderr, result
+    privacy_manifest.write_bytes(data)
+
     # 删除资源仅针对临时副本，验证检查会明确失败，不会借用 .build 内的资源。
     shutil.rmtree(app / "Contents/Resources/Screenshot_Screenshot.bundle")
     result = subprocess.run([str(binary), "--packaged-resources-test"], cwd=directory, capture_output=True, text=True, timeout=20)

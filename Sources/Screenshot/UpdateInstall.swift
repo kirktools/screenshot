@@ -112,7 +112,6 @@ enum UpdatePaths {
             FileManager.default.isWritableFile(atPath: destination.deletingLastPathComponent().path))
     }
     static var cache: URL { FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("com.kirktools.screenshot/Updates", isDirectory: true) }
-    static var receipt: URL { cache.appendingPathComponent("last-result.txt") }
 }
 
 struct PreparedUpdate {
@@ -121,7 +120,7 @@ struct PreparedUpdate {
     let team: String?
     func clean() { try? FileManager.default.removeItem(at: root) }
     /// 辅助进程复制到缓存，不从即将被替换的旧应用内执行。
-    func startHelper(parent: Int32, currentApp: URL) async throws -> Process {
+    func startHelper(parent: Int32, currentApp: URL, operationID: UUID) async throws -> Process {
         try UpdatePaths.requireInstallationLocation(currentApp)
         if currentApp.standardizedFileURL.path != UpdatePaths.destination.path && FileManager.default.fileExists(atPath: UpdatePaths.destination.path) { throw UpdateError("新旧应用同时存在，请先核对并保留一份。未替换应用。") }
         let helper = root.appendingPathComponent("UpdateInstaller")
@@ -131,7 +130,7 @@ struct PreparedUpdate {
               executable.deletingLastPathComponent().standardizedFileURL.path == currentApp.appendingPathComponent("Contents/MacOS").path else { throw UpdateError("当前应用可执行文件位置无效。") }
         try FileManager.default.copyItem(at: executable, to: helper)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
-        let manifest = UpdateManifest(parentPID: parent, app: app.path, version: version.description, team: team, installedApp: currentApp.path)
+        let manifest = UpdateManifest(parentPID: parent, app: app.path, version: version.description, team: team, installedApp: currentApp.path, operationID: operationID)
         let file = root.appendingPathComponent("manifest.json")
         try JSONEncoder().encode(manifest).write(to: file, options: .atomic)
         let process = Process(); process.executableURL = helper; process.arguments = ["--apply-update", file.path]
@@ -140,6 +139,7 @@ struct PreparedUpdate {
         do {
             let deadline = Date().addingTimeInterval(8)
             let ready = root.appendingPathComponent("ready.txt")
+            defer { try? FileManager.default.removeItem(at: ready) }
             while Date() < deadline {
                 try Task.checkCancellation()
                 if let result = try? String(contentsOf: ready, encoding: .utf8) {
@@ -162,9 +162,56 @@ struct UpdateManifest: Codable {
     let app: String, version: String
     let team: String?
     let installedApp: String
+    let operationID: UUID
 }
 
-/// 同盘目录替换，不覆写运行中 Mach-O；失败保留旧目录和 ZIP，下一次检查可读结果。
+/// 助手通过启动参数传递固定结果，新进程沿用安装前的操作编号记录诊断。
+struct UpdateRelaunchResult {
+    enum Outcome: String {
+        case installed, installFailed, recoveryFailed
+    }
+
+    let operationID: UUID
+    let outcome: Outcome
+
+    init(operationID: UUID, outcome: Outcome) {
+        self.operationID = operationID
+        self.outcome = outcome
+    }
+
+    static func from(arguments: [String]) -> Self? {
+        guard let index = arguments.firstIndex(of: "--update-result"), arguments.count == index + 3,
+              let operationID = UUID(uuidString: arguments[index + 1]),
+              let outcome = Outcome(rawValue: arguments[index + 2])
+        else { return nil }
+        return Self(operationID: operationID, outcome: outcome)
+    }
+
+    var launchArguments: [String] {
+        ["--args", "--update-result", operationID.uuidString, outcome.rawValue]
+    }
+
+    var notice: String? {
+        switch outcome {
+        case .installed: return nil
+        case .installFailed: return "上次更新未完成。可重试，或从备份恢复旧版。"
+        case .recoveryFailed: return "上次更新未能自动恢复旧版。请检查更新备份目录，必要时从 ZIP 恢复。"
+        }
+    }
+
+    func record() {
+        switch outcome {
+        case .installed:
+            CaptureTiming.recordOutcome("installed", source: "update.install", operationID: operationID)
+        case .installFailed:
+            CaptureTiming.recordOutcome("failed", source: "update.install", operationID: operationID, error: "install_failed")
+        case .recoveryFailed:
+            CaptureTiming.recordOutcome("failed", source: "update.install", operationID: operationID, error: "rollback_failed")
+        }
+    }
+}
+
+/// 同盘目录替换，不覆写运行中 Mach-O；失败保留旧目录和 ZIP。
 enum UpdateInstaller {
     static func swap(source: URL, destination: URL, backupDirectory: URL, previousDestination: URL? = nil,
                      validate: (URL) throws -> Void = { _ in }, move: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) }) throws {
@@ -186,7 +233,7 @@ enum UpdateInstaller {
         do { try move(newApp, destination) }
         catch {
             do { try move(oldApp, previous) }
-            catch { preserve = true; throw UpdateError("自动恢复失败，旧应用保留在 \(oldApp.path)；备份为 \(backup.path)。") }
+            catch { preserve = true; throw UpdateError("自动恢复失败，旧应用保留在 \(oldApp.path)；备份为 \(backup.path)。", requiresManualRecovery: true) }
             throw UpdateError("安装失败，已恢复旧版。备份：\(backup.path)")
         }
     }
@@ -196,6 +243,8 @@ enum UpdateInstaller {
               url.deletingLastPathComponent().deletingLastPathComponent().path == UpdatePaths.cache.standardizedFileURL.path else { return 1 }
         let root = url.deletingLastPathComponent()
         var originalURL = UpdatePaths.destination
+        var relaunchOperation: UUID?
+        var installed = false
         do {
             guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max) < 8192 else { throw UpdateError("更新任务信息过大。") }
             let data = try Data(contentsOf: url)
@@ -217,20 +266,31 @@ enum UpdateInstaller {
             let deadline = Date().addingTimeInterval(30)
             while kill(manifest.parentPID, 0) == 0 && Date() < deadline { Thread.sleep(forTimeInterval: 0.1) }
             guard kill(manifest.parentPID, 0) != 0 else { throw UpdateError("原应用尚未退出，未进行安装。") }
+            relaunchOperation = manifest.operationID
             try swap(source: URL(fileURLWithPath: manifest.app), destination: UpdatePaths.destination,
                      backupDirectory: UpdatePaths.cache.appendingPathComponent("Backups"), previousDestination: originalURL, validate: { app in
                 try UpdateBundle.inspect(app).requireCompatible(expected: version, currentTeam: original.team, currentCertificate: original.certificate)
             })
-            try "已更新到 \(version)。旧版备份保留在 \(UpdatePaths.cache.appendingPathComponent("Backups").path)。".write(to: UpdatePaths.receipt, atomically: true, encoding: .utf8)
-            _ = try UpdateCommand.run("/usr/bin/open", [UpdatePaths.destination.path])
+            installed = true
+            let result = UpdateRelaunchResult(operationID: manifest.operationID, outcome: .installed)
+            _ = try UpdateCommand.run("/usr/bin/open", [UpdatePaths.destination.path] + result.launchArguments)
             try? fm.removeItem(at: root)
             return 0
         } catch {
-            try? error.localizedDescription.write(to: root.appendingPathComponent("ready.txt"), atomically: true, encoding: .utf8)
-            try? fm.createDirectory(at: UpdatePaths.cache, withIntermediateDirectories: true)
-            try? "上次更新失败：\(error.localizedDescription)".write(to: UpdatePaths.receipt, atomically: true, encoding: .utf8)
-            let reopen = fm.fileExists(atPath: originalURL.path) ? originalURL : UpdatePaths.destination
-            if fm.fileExists(atPath: reopen.path) { _ = try? UpdateCommand.run("/usr/bin/open", [reopen.path]) }
+            if let operationID = relaunchOperation {
+                let outcome: UpdateRelaunchResult.Outcome
+                if installed { outcome = .installed }
+                else if (error as? UpdateError)?.requiresManualRecovery == true { outcome = .recoveryFailed }
+                else { outcome = .installFailed }
+                let result = UpdateRelaunchResult(operationID: operationID, outcome: outcome)
+                let reopen = fm.fileExists(atPath: originalURL.path) ? originalURL : UpdatePaths.destination
+                if fm.fileExists(atPath: reopen.path) {
+                    _ = try? UpdateCommand.run("/usr/bin/open", [reopen.path] + result.launchArguments)
+                }
+            } else {
+                // 仅唤醒仍在等待的宿主。宿主读完即删除交接文件。
+                try? error.localizedDescription.write(to: root.appendingPathComponent("ready.txt"), atomically: true, encoding: .utf8)
+            }
             return 1
         }
     }

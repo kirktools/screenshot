@@ -4,8 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 version=$(tr -d '\r\n' < VERSION)
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'VERSION 必须是 x.y.z' >&2; exit 1; }
-app="$PWD/dist/Screenshot.app"
-[[ -d "$app" ]] || { echo '请先构建 dist/Screenshot.app。' >&2; exit 1; }
+output_dir="${SCREENSHOT_APP_OUTPUT_DIR:-$PWD/dist}"
+app="$output_dir/Screenshot.app"
+[[ -d "$app" ]] || { echo '请先构建 Screenshot.app。' >&2; exit 1; }
 codesign --verify --deep --strict "$app"
 app_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
 [[ "$app_version" == "$version" ]] || { echo '应用版本与 VERSION 不一致，请重新构建。' >&2; exit 1; }
@@ -15,7 +16,7 @@ trap 'rm -rf "$staging"' EXIT
 # 使用独立副本，避免为创建镜像改动已签名的应用或混入 dist 中的旧产物。
 ditto "$app" "$staging/Screenshot.app"
 ln -s /Applications "$staging/Applications"
-image="$PWD/dist/Screenshot-$version-macOS.dmg"
+image="$output_dir/Screenshot-$version-macOS.dmg"
 hdiutil create -ov -format UDZO -fs HFS+ -volname 'Screenshot' -srcfolder "$staging" "$image"
 hdiutil verify "$image"
 echo "已生成安装镜像：$image"

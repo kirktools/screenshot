@@ -1,11 +1,15 @@
 import AppKit
 import Carbon
+import KirkLogging
 import KirkTranslation
+import KirkTranslationUI
+import SwiftUI
 import StitchCore
 
 /// 不读取桌面、不申请权限：验证平台渲染、拼接方向和实际导出像素。
 @MainActor func runSelfTest() async throws {
     guard localized("capture.normal") != "capture.normal" else { throw CaptureError.message("运行位置的语言资源未加载") }
+    try await runDiagnosticsSelfTest()
     try await runEditorControlsSelfTest()
     try runLongImageBudgetSelfTest()
     try runNewTextDefaultsSelfTest()
@@ -21,7 +25,7 @@ import StitchCore
     try runGIFEncodingSelfTest()
     try runCaptureTextRecognitionSelfTest()
     try await runCaptureTextPanelLayoutSelfTest()
-    try runTranslationSentenceHoverSelfTest()
+    try runSharedTranslationViewSelfTest()
     try runCaptureAISettingsSuspensionSelfTest()
     try await runCloudTranslationSelfTest()
     print("截图文字：合成图片识别、打码后不再读出文字通过")
@@ -685,7 +689,55 @@ import StitchCore
     print("AI 翻译设置：冻结层暂停、浏览器窗口层级、返回及关闭恢复通过")
 }
 
-@MainActor private func runTranslationSentenceHoverSelfTest() throws {
+func runDiagnosticsSelfTest() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let log = try DiagnosticLog(configuration: .init(app: "ScreenshotTest", channel: .dev, role: "host",
+                                                       version: "0", build: "0"), enabled: true, baseDirectory: root)
+    let timing = CaptureTiming(source: "translation.ocr", log: log)
+    timing.mark("scan.begin")
+    timing.httpStatus(429)
+    timing.finish("failed", error: "usage_limit")
+    timing.finish("duplicate")
+    log.setEnabled(false)
+    CaptureTiming(source: "translation.ocr", log: log).finish("disabled")
+    let url = root.appendingPathComponent("fixture.json")
+    let count = try await log.export(to: url, matching: .init(module: "translation.ocr", levels: [.error]))
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .millisecondsSince1970
+    let report = try decoder.decode([DiagnosticRecord].self, from: Data(contentsOf: url))
+    guard count == 1, report.first?.operationID == timing.operationID, report.first?.errorCode == "usage_limit",
+          report.first?.elapsedMS != nil else { throw CaptureError.message("共享日志未保留筛选范围或操作关联") }
+    _ = try await log.export(to: url)
+    let all = try decoder.decode([DiagnosticRecord].self, from: Data(contentsOf: url))
+    guard all.map(\.event) == ["started", "scan.begin", "http.429", "failed"] else {
+        throw CaptureError.message("诊断关停或操作结束后仍写入了事件")
+    }
+    let release = CaptureTiming.Level.resolve(saved: nil, legacyEnabled: nil, isDevelopment: false)
+    let dev = CaptureTiming.Level.resolve(saved: nil, legacyEnabled: nil, isDevelopment: true)
+    guard release == .warning, dev == .debug,
+          CaptureTiming.Level.resolve(saved: nil, legacyEnabled: false, isDevelopment: true) == .off,
+          CaptureTiming.Level.resolve(saved: "error", legacyEnabled: true, isDevelopment: true) == .error,
+          CaptureTiming.Level.resolve(saved: nil, legacyEnabled: true, isDevelopment: false) == .debug
+    else { throw CaptureError.message("诊断默认等级或旧偏好迁移异常") }
+    log.setEnabled(true)
+    let warning = CaptureTiming(source: "action.normal", log: log, minimumLevel: { release })
+    warning.mark("capture.enter")
+    warning.finish("permission_required", error: "permission_required", level: .warning)
+    let silent = CaptureTiming(source: "action.normal", log: log, minimumLevel: { release })
+    silent.finish("success")
+    _ = try await log.export(to: url, matching: .init(module: "action.normal"))
+    let filtered = try decoder.decode([DiagnosticRecord].self, from: Data(contentsOf: url))
+    guard filtered.count == 1, filtered.first?.level == .warning, filtered.first?.operationID == warning.operationID
+    else { throw CaptureError.message("正式版默认等级记录了常规操作") }
+
+    try await log.clear()
+    let remaining = try await log.export(to: url)
+    guard remaining == 0 else { throw CaptureError.message("清理后仍然可以导出诊断记录") }
+    print("共享诊断：等级、旧偏好、阶段记录、过滤导出及清除通过")
+}
+
+@MainActor private func runSharedTranslationViewSelfTest() throws {
     let source = "The first example is short. The second example has more words."
     let target = "第一个例子很短。第二个例子有更多词。"
     let pairs = TranslationSentencePairs(original: source, translation: target)
@@ -719,52 +771,26 @@ import StitchCore
         throw CaptureError.message("翻译联动未正确处理模型分段或流式标记")
     }
 
-    let scroll = LinkedTranslationText.makeScrollView()
-    guard let view = scroll.documentView as? SentenceHoverTextView,
-          let layout = view.layoutManager, let container = view.textContainer else {
-        throw CaptureError.message("翻译文本没有可用的原生布局")
-    }
-    let window = NSWindow(contentRect: CGRect(x: 40, y: 40, width: 280, height: 140),
+    let hosting = NSHostingController(rootView: TranslationTextColumns(
+        original: source, translation: target, originalTitle: "Original", translationTitle: "Translation",
+        copyTitle: "Copy", pairs: pairs
+    ))
+    let window = NSWindow(contentRect: CGRect(x: 40, y: 40, width: 300, height: 260),
                           styleMask: [.titled], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
-    window.contentView = scroll
+    window.contentViewController = hosting
     defer { window.close() }
-    view.string = source
-    view.sentences = pairs.original
-    view.updateTrackingAreas()
-    guard view.trackingAreas.contains(where: { $0.options.contains(.activeAlways) }) else {
-        throw CaptureError.message("翻译悬停依赖浮窗取得键盘焦点")
+    hosting.view.layoutSubtreeIfNeeded()
+    func textViews(in view: NSView) -> [NSTextView] {
+        if let text = view as? NSTextView { return [text] }
+        return view.subviews.flatMap(textViews)
     }
-    layout.ensureLayout(for: container)
-    let glyphs = layout.glyphRange(forCharacterRange: NSRange(location: pairs.original[1].location, length: 1),
-                                   actualCharacterRange: nil)
-    let glyph = layout.boundingRect(forGlyphRange: glyphs, in: container)
-    let cursor = view.convert(CGPoint(x: glyph.midX + view.textContainerOrigin.x,
-                                     y: glyph.midY + view.textContainerOrigin.y), to: nil)
-    guard let move = NSEvent.mouseEvent(with: .mouseMoved, location: cursor, modifierFlags: [],
-                                        timestamp: 0, windowNumber: window.windowNumber, context: nil,
-                                        eventNumber: 1, clickCount: 0, pressure: 0) else {
-        throw CaptureError.message("未能创建翻译悬停测试事件")
+    let texts = textViews(in: hosting.view)
+    guard texts.contains(where: { $0.string == source && !$0.isEditable }),
+          texts.contains(where: { $0.string == target && !$0.isEditable }) else {
+        throw CaptureError.message("共享翻译组件未显示原文和译文")
     }
-    var hovered: Int?
-    view.onHover = { hovered = $0 }
-    view.mouseMoved(with: move)
-    guard hovered == 1 else { throw CaptureError.message("翻译悬停未命中第二句") }
-    let sourceColor = CaptureTextModel.TextSide.original.highlightColor
-    let translatedColor = CaptureTextModel.TextSide.translation.highlightColor
-    view.updateHighlight(pairs.original[1], color: sourceColor, reveal: false)
-    let location = pairs.original[1].location
-    guard sourceColor != translatedColor,
-          layout.temporaryAttribute(.backgroundColor, atCharacterIndex: location, effectiveRange: nil) as? NSColor == sourceColor else {
-        throw CaptureError.message("译句悬停未添加高亮")
-    }
-    view.mouseExited(with: move)
-    view.updateHighlight(nil, color: sourceColor, reveal: false)
-    guard hovered == nil,
-          layout.temporaryAttribute(.backgroundColor, atCharacterIndex: location, effectiveRange: nil) == nil else {
-        throw CaptureError.message("鼠标离开后未清除译句高亮")
-    }
-    print("翻译句子联动：中英文分句、合句保护、原生文字命中及临时高亮通过")
+    print("共享翻译组件：原文、译文、分句和流式段落标记通过")
 }
 
 /// 模拟配置的云端端点，验证请求通路和额度错误，不访问真实服务。

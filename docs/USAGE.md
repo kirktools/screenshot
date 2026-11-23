@@ -122,7 +122,7 @@ MIT License，Copyright © 2026 **kirktools**。
 
 公开仓库直接使用 HTTPS；目前仓库私有时，可复用本机已经安装并登录的 `gh`（需有仓库读取权限）。应用不会读取、保存令牌或自动登录。没有可用权限、正式版或校验文件时会说明原因，不尝试其他来源。
 
-旧版 ZIP 保留在 `~/Library/Caches/com.kirktools.screenshot/Updates/Backups/`，结果记录为同级 `last-result.txt`。替换失败自动恢复旧版；恢复也失败时会保留旧目录并报告位置，可退出应用后从备份解压恢复到 Applications。备份由用户自行清理。
+旧版 ZIP 保留在 `~/Library/Caches/com.kirktools.screenshot/Updates/Backups/`，更新诊断与截图诊断共用 KirkLogging。替换失败自动恢复旧版；恢复也失败时会保留旧目录，可退出应用后从备份解压恢复到 Applications。备份由用户自行清理。
 
 更新不解决未公证应用的系统限制：保留下载隔离标记，macOS 仍可能要求核验后「仍要打开」；固定自签名发布需先配置 Actions Secrets，同证书更新用于延续授权；旧 ad-hoc 包初次迁移仍可能需要授权。下载的系统信任体验需要 Developer ID 和公证才能进一步改善，勿关闭系统安全保护。
 
@@ -135,23 +135,27 @@ MIT License，Copyright © 2026 **kirktools**。
 
 日常版旧安装迁移器检测到仅有旧的 `/Applications/Kirk Screenshot.app` 时，验证应用身份、备份后迁移到新路径；失败恢复旧名称，不同时保留两份。若新旧两份均存在，或新路径属于其他应用，会停止并说明原因，不覆盖其他软件。手动拖入 DMG 时也应先退出并备份旧版，避免留下两份。路径和 ad-hoc 签名变化后，macOS 仍可能要求重新录屏授权；安装器不重置权限。`make dev` 只更新独立开发版，不参与日常版迁移。
 
-### 截图响应耗时
+### 本机诊断
 
-开发版自动记录本机阶段耗时，运行 `make timing` 查看最近 10 次。可用 `python3 scripts/capture-timing.py --slow-ms 200 --last 20` 筛选慢请求。
+正式版默认记录警告及错误，开发版默认记录详细阶段。可在设置的「本机诊断等级」随时选择关闭、仅错误、警告及错误、操作与结果或详细阶段。排查卡顿时选择「详细阶段」。升级时会沿用以前明确选择的开启或关闭状态。关闭后保留已有记录。在同一处可打开日志目录、清除当前通道的日志，或选择「导出诊断…」按来源筛选并保存 JSON。应用不会上传日志。
 
-日志在 `~/Library/Logs/Screenshot Dev/capture-timing.jsonl`，约 1 MB 轮转、另保留一份备份。仅记录时间、阶段、缓存命中和随机进程会话标识，不记录像素、窗口标题、应用列表、路径、输入内容，也不上传。可删除这些文件清理记录。
+日志由 KirkLogging 按大小和时间轮转，开发版位于 `~/Library/Logs/Screenshot/dev/host/`，正式版位于 `~/Library/Logs/Screenshot/release/host/`。旧版的 `capture-timing.jsonl` 不自动迁入新目录，需要排查旧记录时可把旧文件路径直接传给工具。
 
-阶段覆盖快捷键回调、权限预检、主线程任务进入、元数据查询、逐屏采集及合成、窗口列表、选区首次绘制。各行 `+ms` 是距离上一个阶段的间隔；`hotkey.callback` 的事件排队值来自系统事件时间戳，不等于手指按键到屏幕亮起的硬件延迟。`selector.first_draw` 只表示首个选区视图完成绘制，不保证所有显示器都已经呈现。失败或忙碌请求有独立结果标签。
+运行 `make timing` 查看开发版最近 10 次操作。也可运行：
 
-正式版默认不记录。排查时可执行 `defaults write com.kirktools.screenshot diagnostics.captureTiming -bool true` 后重启开启，日志位于 `~/Library/Logs/Screenshot/`；设为 `false` 并重启关闭。日志写入在独立队列进行，不在采集关键路径同步写盘。
+```sh
+python3 scripts/capture-timing.py --slow-ms 200 --last 20
+python3 scripts/capture-timing.py --source translation.chatgpt.models --failures
+python3 scripts/capture-timing.py --channel release
+```
+
+截图记录快捷键回调、权限预检、元数据查询、逐屏采集、合成和首个选区视图绘制。快捷键回调处的耗时来自系统事件时间戳，首个视图绘制也不代表所有屏幕已呈现。滚动长截图、GIF、OCR、翻译和 AI 识图分别记录处理阶段及结果。ChatGPT 请求记录网络分项耗时与固定 HTTP 分类。普通阶段显示从操作开始经过的时间，独立的网络分项显示各自的耗时。
 
 ### 录制 GIF
 
 按普通截图快捷键框选同一显示器内的区域，在工具栏点击摄像机图标进入 GIF 录制，再点击“开始录制”；无需重新框选，不录制截图标注。也可从菜单栏选择“录制 GIF…”。设置中关闭“长截图独立快捷键”，即可只占用普通截图一组快捷键，长截图和 GIF 都从框选后的工具栏进入。操作目标应用后，点击“停止并预览”或按回车结束，Esc 取消；预览中点击“保存 GIF…”导出。本应用边框和控件不进入采集，不录制音频和光标，全程在本机处理。
 
 首版最高 10 fps、最长边 1280 像素，最长录制 60 秒，压缩帧缓冲上限约 96 MB；达到上限自动结束并预览。静止画面的停留时长保留。显示器布局改变时取消录制，请重新框选。GIF 只有有限色彩，照片、渐变与高帧率动画可能失真，不适合代替视频录屏；不支持跨屏录制。
-
-设置中的“记录本机诊断日志”可随时开关，从下一次截图、翻译或模型列表请求生效，无需重启。正式版默认关闭，开发版默认开启；显式关闭优先于开发环境默认值。可打开当前版本的日志目录或清除当前日志及轮转备份，关闭开关不会自动删除历史记录。诊断包含阶段、结果和耗时，以及模型列表请求的 HTTP 状态、响应类型和条目数，不记录图片、窗口标题、OCR 内容或授权凭据，也不上传。点「获取模型列表」后，可运行 `python3 scripts/capture-timing.py --source translation.chatgpt.models` 查看开发版的列表请求。翻译日志可用同一命令并改用 `--source translation.chatgpt` 或 `--source translation.api_key`，OCR 则用 `--source translation.ocr`。ChatGPT 翻译会分别记录会话就绪、HTTP 响应、首段译文和完成时间。每次操作有独立编号，用 `--failures` 可只看有错误分类的记录。
 
 ### 文字与水印
 

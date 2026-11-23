@@ -25,7 +25,9 @@ import AppKit
         let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知"
         let version = NSTextField(labelWithString: "当前版本 \(current) · 仅检查 GitHub 正式 Release")
         version.textColor = .secondaryLabelColor
-        let note = NSTextField(wrappingLabelWithString: "更新会先校验并备份旧版，再替换并重启。未签名/未公证版本仍可能被 macOS 拦截，或需要重新授予录屏权限；不会自动放宽系统保护。")
+        let defaultNote = "更新会先校验并备份旧版，再替换并重启。未签名/未公证版本仍可能被 macOS 拦截，或需要重新授予录屏权限。"
+        let recoveryNote = UpdateRelaunchResult.from(arguments: CommandLine.arguments)?.notice
+        let note = NSTextField(wrappingLabelWithString: recoveryNote ?? defaultNote)
         note.textColor = .secondaryLabelColor; note.font = .systemFont(ofSize: 12)
         progress.style = .spinning; progress.controlSize = .small; progress.isDisplayedWhenStopped = false
         action.target = self; action.action = #selector(primary)
@@ -50,19 +52,21 @@ import AppKit
         working("正在检查正式版本…")
         task = Task { [weak self] in
             guard let self else { return }
+            let timing = CaptureTiming(source: "update.check")
             do {
                 let current = try ReleaseVersion(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0")
                 let result = try await client.check(current: current)
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else { timing.finish("cancelled"); return }
+                timing.finish(result == nil ? "up_to_date" : "update_available")
                 offer = result
                 if let result {
                     status.stringValue = "发现新版本 \(result.package.version)。点击更新将下载、校验并安装。" + (result.usesCLI ? " 当前使用本机已登录的 GitHub CLI 读取私有仓库。" : "")
                     idle("更新并重启")
                 } else { status.stringValue = "当前已是最新正式版本。"; idle("重新检查") }
             } catch {
-                guard !Task.isCancelled else { return }
-                let previous = (try? Data(contentsOf: UpdatePaths.receipt)).flatMap { $0.count <= 8192 ? String(data: $0, encoding: .utf8) : nil }.map { "\n\($0)" } ?? ""
-                status.stringValue = error.localizedDescription + previous; idle("重试检查")
+                guard !Task.isCancelled else { timing.finish("cancelled"); return }
+                timing.finish("failed", error: "check_failed")
+                status.stringValue = error.localizedDescription; idle("重试检查")
             }
         }
     }
@@ -80,12 +84,15 @@ import AppKit
         working("正在下载并校验更新，请勿移动当前应用…")
         task = Task { [weak self] in
             guard let self else { return }
+            let timing = CaptureTiming(source: "update.download")
             do {
                 let value = try await client.prepare(offer, currentApp: Bundle.main.bundleURL)
-                guard !Task.isCancelled else { value.clean(); return }
+                guard !Task.isCancelled else { timing.finish("cancelled"); value.clean(); return }
+                timing.finish("success")
                 prepared = value; idle("安装并重启"); install(value)
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else { timing.finish("cancelled"); return }
+                timing.finish("failed", error: "download_failed")
                 status.stringValue = error.localizedDescription; idle("重试下载")
             }
         }
@@ -95,14 +102,17 @@ import AppKit
         working("正在启动安装助手…")
         task = Task { [self] in
             defer { endInstall() }
+            let timing = CaptureTiming(source: "update.install")
             do {
-                let helper = try await prepared.startHelper(parent: ProcessInfo.processInfo.processIdentifier, currentApp: Bundle.main.bundleURL)
-                guard Self.acceptReadyHelper(helper, cancelled: Task.isCancelled) else { return }
+                let helper = try await prepared.startHelper(parent: ProcessInfo.processInfo.processIdentifier,
+                                                            currentApp: Bundle.main.bundleURL, operationID: timing.operationID)
+                guard Self.acceptReadyHelper(helper, cancelled: Task.isCancelled) else { timing.finish("cancelled"); return }
                 // 只在助手完成校验并报告就绪后退出，避免助手失败导致应用白白关闭。
                 self.prepared = nil
                 NSApp.terminate(nil)
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else { timing.finish("cancelled"); return }
+                timing.finish("failed", error: "handoff_failed")
                 status.stringValue = error.localizedDescription; idle("重试安装")
             }
         }

@@ -1,5 +1,6 @@
 import AppKit
 import KirkTranslation
+import KirkTranslationUI
 import SwiftUI
 import Vision
 
@@ -65,29 +66,18 @@ final class CaptureTextPanel: NSPanel {
         let id = UUID()
         let target: String
         let engine: Engine
+        let systemTiming: CaptureTiming?
+
+        init(target: String, engine: Engine) {
+            self.target = target
+            self.engine = engine
+            systemTiming = engine == .system ? CaptureTiming(source: "translation.system") : nil
+        }
     }
 
     @Published var source: String?
     @Published var recognitionFailed = false
-    enum TextSide {
-        case original, translation
-
-        var highlightColor: NSColor {
-            switch self {
-            case .original: return NSColor.systemBlue.withAlphaComponent(0.28)
-            case .translation: return NSColor.systemOrange.withAlphaComponent(0.28)
-            }
-        }
-    }
-
-    struct SentenceHover: Equatable {
-        let side: TextSide
-        let index: Int
-    }
-
-    @Published var hoveredSentence: SentenceHover?
     @Published var sentencePairs: TranslationSentencePairs?
-    var hoverSidesRecorded: Set<TextSide> = []
     @Published var translated = ""
     @Published var partialTranslation = ""
     @Published var resultEngine: Engine?
@@ -178,7 +168,6 @@ struct CaptureTextView: View {
                         model.status = ""
                         model.translated = ""
                         model.sentencePairs = nil
-                        model.hoveredSentence = nil
                         model.resultEngine = nil
                     }
                     Spacer(minLength: 0)
@@ -228,16 +217,16 @@ struct CaptureTextView: View {
                         .textSelection(.enabled)
                 }
                 let pairs = model.input == nil && model.sentencePairs?.canHighlight == true ? model.sentencePairs : nil
-                if pairs?.isApproximate == true {
-                    Text(localized("capture_text.approximate_alignment")).font(.caption).foregroundStyle(.secondary)
-                }
-                textColumn("capture_text.original", source, side: .original, sentences: pairs?.original)
-                    .frame(height: 112)
-                textColumn(model.partialTranslation.isEmpty ? resultTitle : "capture_text.ai_result",
-                           model.partialTranslation.isEmpty ? model.translated : model.partialTranslation,
-                           side: .translation, sentences: pairs?.translation,
-                           canCopy: model.partialTranslation.isEmpty)
-                    .frame(maxHeight: .infinity)
+                TranslationTextColumns(
+                    original: source,
+                    translation: model.partialTranslation.isEmpty ? model.translated : model.partialTranslation,
+                    originalTitle: localized("capture_text.original"),
+                    translationTitle: localized(model.partialTranslation.isEmpty ? resultTitle : "capture_text.ai_result"),
+                    copyTitle: localized("capture_text.copy"),
+                    pairs: pairs,
+                    approximateAlignmentNote: localized("capture_text.approximate_alignment"),
+                    translationCanCopy: model.partialTranslation.isEmpty
+                )
                 if let input = model.input {
                     translationWorker(source, input: input)
                 }
@@ -267,7 +256,7 @@ struct CaptureTextView: View {
                         let network = CaptureTiming(source: "translation.chatgpt.network", operationID: timing.operationID)
                         result = try await CaptureTranslationSettings.chatGPT.translate(
                             segmented.source, target: input.target, model: chatModel, segmentMarker: segmented.marker,
-                            onHeaders: { timing.mark("http.status", value: Double($0)) },
+                            onHeaders: timing.httpStatus,
                             onSessionReady: { timing.mark("session.ready") },
                             onText: { text in
                                 if !receivedText {
@@ -278,13 +267,13 @@ struct CaptureTextView: View {
                                 model.partialTranslation = segmented.render(text, streaming: true).text
                             },
                             onNetworkTiming: { trace in
-                                if let dns = trace.dns { network.mark("network.dns_ms", value: dns) }
-                                if let tcp = trace.tcp { network.mark("network.tcp_ms", value: tcp) }
-                                if let tls = trace.tls { network.mark("network.tls_ms", value: tls) }
-                                if let wait = trace.responseWait { network.mark("network.response_wait_ms", value: wait) }
-                                network.mark("network.total_ms", value: trace.total)
-                                network.mark("network.proxy", value: trace.proxy ? 1 : 0)
-                                network.mark("network.reused", value: trace.reused ? 1 : 0)
+                                if let dns = trace.dns { network.mark("network.dns_ms", elapsedMS: dns) }
+                                if let tcp = trace.tcp { network.mark("network.tcp_ms", elapsedMS: tcp) }
+                                if let tls = trace.tls { network.mark("network.tls_ms", elapsedMS: tls) }
+                                if let wait = trace.responseWait { network.mark("network.response_wait_ms", elapsedMS: wait) }
+                                network.mark("network.total_ms", elapsedMS: trace.total)
+                                if trace.proxy { network.mark("network.proxy") }
+                                if trace.reused { network.mark("network.reused") }
                                 network.finish("measured")
                             }
                         )
@@ -295,7 +284,7 @@ struct CaptureTextView: View {
                         }
                         timing.mark("session.ready")
                         result = try await config.translate(segmented.source, target: input.target, apiKey: key, segmentMarker: segmented.marker,
-                                                            onHeaders: { timing.mark("http.status", value: Double($0)) })
+                                                            onHeaders: timing.httpStatus)
                     }
                     timing.mark("response.complete")
                     timing.finish(Task.isCancelled ? "cancelled" : "success")
@@ -307,12 +296,15 @@ struct CaptureTextView: View {
                 }
             }
         } else if #available(macOS 15.0, *) {
+            let timing = input.systemTiming
             anchor.modifier(SystemTranslation(text: source, target: .init(identifier: input.target), progress: { phase in
                 guard model.input?.id == input.id else { return }
                 switch phase {
                 case .needsLanguageDownload:
+                    timing?.mark("language.download_required")
                     model.status = localized("capture_text.language_download")
                 case .translating:
+                    timing?.mark("translation.begin")
                     model.status = localized("capture_text.translating")
                 }
             }) { result in
@@ -333,11 +325,7 @@ struct CaptureTextView: View {
             let timing = CaptureTiming(source: "translation.alignment")
             let pairs = alignedPairs ?? TranslationSentencePairs(original: model.source ?? "", translation: text)
             model.sentencePairs = pairs
-            model.hoverSidesRecorded.removeAll()
-            timing.mark("original.sentences", value: Double(pairs.originalSentenceCount))
-            timing.mark("translation.sentences", value: Double(pairs.translatedSentenceCount))
             if alignedPairs != nil { timing.mark("segments.explicit") }
-            if pairs.isApproximate { timing.mark("segments.grouped", value: Double(pairs.original.count)) }
             timing.finish(pairs.canHighlight ? "paired" : "no_sentences")
             model.resultEngine = input.engine
             model.status = ""
@@ -347,40 +335,7 @@ struct CaptureTextView: View {
     }
 
     private func beginTranslation(_ engine: CaptureTextModel.Engine) {
-        model.hoveredSentence = nil
         model.status = localized(engine == .system ? "capture_text.checking_languages" : "capture_text.cloud_wait")
         model.input = CaptureTextModel.TranslationInput(target: model.target, engine: engine)
-    }
-
-    private func textColumn(_ title: String, _ text: String, side: CaptureTextModel.TextSide,
-                            sentences: [NSRange]?, canCopy: Bool = true) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(localized(title)).font(.headline)
-                Spacer()
-                Button(localized("capture_text.copy")) {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(text, forType: .string)
-                }
-                .accessibilityLabel(localized("capture_text.copy") + " " + localized(title))
-                .disabled(text.isEmpty || !canCopy)
-            }
-            LinkedTranslationText(text: text, sentences: sentences ?? [], highlighted: model.hoveredSentence?.index,
-                                  highlightColor: side.highlightColor, revealHighlight: model.hoveredSentence.map { $0.side != side } ?? false) { index in
-                let hover = index.map { CaptureTextModel.SentenceHover(side: side, index: $0) }
-                if let hover {
-                    if model.hoverSidesRecorded.insert(side).inserted {
-                        let timing = CaptureTiming(source: "translation.hover")
-                        timing.mark(side == .original ? "original.hit" : "translation.hit")
-                        timing.finish("success")
-                    }
-                    if model.hoveredSentence != hover { model.hoveredSentence = hover }
-                } else if model.hoveredSentence?.side == side {
-                    model.hoveredSentence = nil
-                }
-            }
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-        }
-        .frame(maxWidth: .infinity)
     }
 }
