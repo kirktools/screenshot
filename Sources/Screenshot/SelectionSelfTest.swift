@@ -45,7 +45,7 @@ import AppKit
                 entry(CGRect(x: 5000, y: 0, width: 100, height: 100)),
                 [kCGWindowOwnerPID as String: 5]]
     let regions = WindowPreselection.regions(from: data, excludingPID: 99, screenTop: 800, desktop: desktop)
-    try require(regions == [CGRect(x: -300, y: 150, width: 200, height: 400), CGRect(x: 900, y: 600, width: 100, height: 100)],
+    try require(regions == [CGRect(x: 20, y: 670, width: 200, height: 100), CGRect(x: -300, y: 150, width: 200, height: 400), CGRect(x: 900, y: 600, width: 100, height: 100)],
                 "窗口过滤、负坐标转换、屏幕边缘裁切或前后顺序不正确：\(regions)")
     try require(WindowPreselection.regions(from: [], excludingPID: 99, screenTop: 800, desktop: desktop).isEmpty, "空窗口列表不能降级")
     var ownUpdate = data[0]
@@ -61,10 +61,9 @@ import AppKit
     let spotlightCandidates = WindowPreselection.regions(
         from: [entry(primary, pid: 12, layer: spotlightLayer),
                entry(spotlightBounds, pid: 12, layer: spotlightLayer),
-               entry(spotlightBounds, pid: 13, layer: spotlightLayer),
-               entry(primary)], excludingPID: 99, screenTop: 900, desktop: primary, spotlightPIDs: [12])
+               entry(primary)], excludingPID: 99, screenTop: 900, desktop: primary)
     try require(spotlightCandidates == [CGRect(x: 180, y: 250, width: 680, height: 500), primary],
-                "聚焦浮层未获得预选，或其他高层窗口和聚焦整屏接收层被错误选中")
+                "聚焦浮层未获得预选，或整屏接收层被错误选中")
     let workArea = CGRect(x: 0, y: 0, width: 1440, height: 870)
     let campoLayer = 23
     let campoPanel = CGRect(x: 400, y: 162, width: 640, height: 467)
@@ -72,12 +71,24 @@ import AppKit
         entry(CGRect(x: 0, y: 30, width: 1440, height: 870), pid: 14, layer: campoLayer),
         entry(campoPanel, pid: 14, layer: campoLayer),
         entry(primary)
-    ], excludingPID: 99, screenTop: 900, desktop: primary, spotlightPIDs: [14], workAreas: [workArea])
+    ], excludingPID: 99, screenTop: 900, desktop: primary, workAreas: [workArea])
     var campoState = RegionSelectionState(candidates: campo)
     let panelCenter = CGPoint(x: 720, y: 505)
     campoState.mouseDown(at: panelCenter)
     try require(campoState.mouseUp(at: panelCenter) == CGRect(x: 400, y: 271, width: 640, height: 467),
                 "Campo 搜索面板被工作区接收层遮挡，或未能单击确认")
+    let dialog = CGRect(x: 463, y: 123, width: 410, height: 385)
+    let modal = WindowPreselection.regions(from: [
+        entry(CGRect(x: 0, y: 0, width: 1440, height: 96), pid: 16, layer: 14),
+        entry(dialog, pid: 15, layer: Int(CGWindowLevelForKey(.modalPanelWindow))),
+        entry(primary)
+    ], excludingPID: 99, screenTop: 900, desktop: primary, workAreas: [workArea])
+    try require(modal.count == 2, "系统屏幕边缘条带被误认为浮窗")
+    var modalState = RegionSelectionState(candidates: modal)
+    let modalCenter = CGPoint(x: dialog.midX, y: 900 - dialog.midY)
+    modalState.mouseDown(at: modalCenter)
+    try require(modalState.mouseUp(at: modalCenter) == CGRect(x: 463, y: 392, width: 410, height: 385),
+                "系统模态弹窗未优先于下方窗口被单击选中")
     let bar = CGRect(x: 0, y: 870, width: 1440, height: 30)
     let menuInfo = [entry(CGRect(x: 0, y: 0, width: 1440, height: 30), layer: Int(CGWindowLevelForKey(.mainMenuWindow)))]
     let menuRegions = WindowPreselection.regions(from: menuInfo, excludingPID: 99, screenTop: 900, desktop: primary)

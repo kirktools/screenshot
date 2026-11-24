@@ -3,25 +3,19 @@ import AppKit
 /// Quartz 窗口坐标以主显示器左上为原点；选择器统一使用 AppKit 屏幕点坐标。
 /// 每次唤起只读取一次窗口列表，保持前后顺序；不查询标题或辅助功能树。
 enum WindowPreselection {
-    // 新版 macOS 的 Spotlight 搜索面板由 Campo 托管。
-    private static let spotlightBundleIDs = ["com.apple.Spotlight", "com.apple.campo"]
-
     @MainActor static func snapshot(including windowsToKeep: Set<CGWindowID> = []) -> [CGRect] {
         let screens = NSScreen.screens
         guard let first = screens.first else { return [] }
         let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-        let spotlight = spotlightBundleIDs.flatMap {
-            NSRunningApplication.runningApplications(withBundleIdentifier: $0)
-        }
         return regions(from: info, excludingPID: ProcessInfo.processInfo.processIdentifier, screenTop: first.frame.maxY,
                        desktop: screens.reduce(CGRect.null) { $0.union($1.frame) }, screens: screens.map(\.frame),
-                       including: windowsToKeep, spotlightPIDs: Set(spotlight.map(\.processIdentifier)),
-                       workAreas: screens.map(\.visibleFrame))
+                       including: windowsToKeep, workAreas: screens.map(\.visibleFrame))
     }
 
-    static func regions(from info: [[String: Any]], excludingPID: Int32, screenTop: CGFloat, desktop: CGRect, screens: [CGRect]? = nil, including windowsToKeep: Set<CGWindowID> = [], spotlightPIDs: Set<Int32> = [], workAreas: [CGRect] = []) -> [CGRect] {
+    static func regions(from info: [[String: Any]], excludingPID: Int32, screenTop: CGFloat, desktop: CGRect, screens: [CGRect]? = nil, including windowsToKeep: Set<CGWindowID> = [], workAreas: [CGRect] = []) -> [CGRect] {
         let menuLayers = [Int(CGWindowLevelForKey(.mainMenuWindow)), Int(CGWindowLevelForKey(.statusWindow))]
-        let spotlightSurfaces = (screens ?? [desktop]) + workAreas
+        let backdropBounds = (screens ?? [desktop]) + workAreas
+        let popupMenuLevel = Int(CGWindowLevelForKey(.popUpMenuWindow))
         var menuBars: [CGRect] = []
         var windows: [CGRect] = []
         for entry in info {
@@ -35,7 +29,8 @@ enum WindowPreselection {
                   quartz.minX.isFinite, quartz.minY.isFinite, quartz.width.isFinite, quartz.height.isFinite,
                   quartz.width > 0, quartz.height > 0 else { continue }
             let rect = CGRect(x: quartz.minX, y: screenTop - quartz.maxY, width: quartz.width, height: quartz.height)
-            if menuLayers.contains(layer.intValue), rect.height >= 16, rect.height <= 64 {
+            if menuLayers.contains(layer.intValue) {
+                guard (16...64).contains(rect.height) else { continue }
                 for screen in screens ?? [desktop] {
                     let part = rect.intersection(screen)
                     // 只承认可见且已展开的顶部条带，不能把高层通知/面板或移出屏幕的隐藏菜单当作菜单栏。
@@ -47,11 +42,21 @@ enum WindowPreselection {
                     } else { menuBars.append(bar) }
                 }
             } else {
-                // 聚焦的结果面板是系统浮层，允许其可见窗口进入候选，排除整屏事件接收层。
-                let spotlightPanel = spotlightPIDs.contains(pid.int32Value) && layer.intValue > 0
-                    && layer.intValue < CGWindowLevelForKey(.screenSaverWindow)
-                    && !spotlightSurfaces.contains { rect.insetBy(dx: -1, dy: -1).contains($0) }
-                guard (layer.intValue == 0 || spotlightPanel), rect.width >= 32, rect.height >= 32 else { continue }
+                // 普通浮窗和模态弹窗保留系统顺序。屏幕级背景与菜单级窗口不参与。
+                let floating = layer.intValue > 0 && layer.intValue < popupMenuLevel
+                    && !backdropBounds.contains { area in
+                        let buffered = rect.insetBy(dx: -1, dy: -1)
+                        guard buffered.intersects(area) else { return false }
+                        if buffered.contains(area) { return true }
+                        let horizontalStrip = buffered.minX <= area.minX && buffered.maxX >= area.maxX
+                            && rect.height <= area.height / 4
+                            && (buffered.minY <= area.minY || buffered.maxY >= area.maxY)
+                        let verticalStrip = buffered.minY <= area.minY && buffered.maxY >= area.maxY
+                            && rect.width <= area.width / 4
+                            && (buffered.minX <= area.minX || buffered.maxX >= area.maxX)
+                        return horizontalStrip || verticalStrip
+                    }
+                guard (layer.intValue == 0 || floating), rect.width >= 32, rect.height >= 32 else { continue }
                 let visible = rect.intersection(desktop)
                 if !visible.isNull, visible.width >= 32, visible.height >= 32 { windows.append(visible.integral) }
             }
