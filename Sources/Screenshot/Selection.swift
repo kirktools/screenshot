@@ -3,6 +3,16 @@ import AppKit
 /// Quartz 窗口坐标以主显示器左上为原点；选择器统一使用 AppKit 屏幕点坐标。
 /// 每次唤起只读取一次窗口列表，保持前后顺序；不查询标题或辅助功能树。
 enum WindowPreselection {
+    @MainActor static func snapshot(including windowsToKeep: Set<CGWindowID> = []) -> [CGRect] {
+        let screens = NSScreen.screens
+        guard let first = screens.first else { return [] }
+        let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        let spotlight = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Spotlight")
+        return regions(from: info, excludingPID: ProcessInfo.processInfo.processIdentifier, screenTop: first.frame.maxY,
+                       desktop: screens.reduce(CGRect.null) { $0.union($1.frame) }, screens: screens.map(\.frame),
+                       including: windowsToKeep, spotlightPIDs: Set(spotlight.map(\.processIdentifier)))
+    }
+
     static func regions(from info: [[String: Any]], excludingPID: Int32, screenTop: CGFloat, desktop: CGRect, screens: [CGRect]? = nil, including windowsToKeep: Set<CGWindowID> = [], spotlightPIDs: Set<Int32> = []) -> [CGRect] {
         let menuLayers = [Int(CGWindowLevelForKey(.mainMenuWindow)), Int(CGWindowLevelForKey(.statusWindow))]
         var menuBars: [CGRect] = []
@@ -101,24 +111,13 @@ final class SelectionWindow: NSWindow {
     var completion: ((CGRect?) -> Void)?
     private var timing: CaptureTiming?
     func selectionDidDraw() { timing?.mark("selector.first_draw"); timing?.finish("first_draw"); timing = nil }
-    func begin(candidates: [CGRect]? = nil, frozenCapture: FrozenCapture? = nil, timing: CaptureTiming? = nil,
-               including windowsToKeep: Set<CGWindowID> = []) {
+    func begin(candidates: [CGRect]? = nil, frozenCapture: FrozenCapture? = nil, timing: CaptureTiming? = nil) {
         self.timing = timing
         guard windows.isEmpty else { return }
         let screens = NSScreen.screens
         guard !screens.isEmpty else { timing?.finish("no_displays", error: "no_displays"); self.timing = nil; let callback = completion; completion = nil; callback?(nil); return }
         self.frozenCapture = frozenCapture
-        let desktop = screens.reduce(CGRect.null) { $0.union($1.frame) }
-        let regions: [CGRect]
-        if let candidates { regions = candidates }
-        else {
-            let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-            let spotlight = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Spotlight")
-            regions = WindowPreselection.regions(from: info, excludingPID: ProcessInfo.processInfo.processIdentifier,
-                                                 screenTop: screens.first?.frame.maxY ?? 0, desktop: desktop, screens: screens.map(\.frame), including: windowsToKeep,
-                                                 spotlightPIDs: Set(spotlight.map(\.processIdentifier)))
-        }
-        timing?.mark("selector.window_list_end")
+        let regions = candidates ?? WindowPreselection.snapshot()
         state = RegionSelectionState(candidates: regions)
         state.hover(at: NSEvent.mouseLocation)
         for screen in screens {

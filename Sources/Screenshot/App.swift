@@ -85,6 +85,7 @@ struct ScreenPermissionAccess {
     private var scrollShortcutEnabled: Bool { (UserDefaults.standard.object(forKey: "hotkeys.scroll.enabled") as? Bool) ?? true }
     var permissionAccess = ScreenPermissionAccess()
     // 先拍下桌面，再允许选区窗口激活；测试可替换成合成快照，不读取屏幕。
+    var snapshotWindowCandidates: (Set<CGWindowID>) -> [CGRect] = WindowPreselection.snapshot(including:)
     var freezeSelection: (Set<CGWindowID>) async throws -> FrozenCapture = { includedWindows in
         let provider = MacCaptureProvider()
         try await provider.prepareForSelection(including: includedWindows)
@@ -352,6 +353,10 @@ struct ScreenPermissionAccess {
         } else {
             includedWindows = []
         }
+        // 候选列表和像素都以快捷键触发时的桌面为准。浮层可能在异步采集期间关闭。
+        timing.mark("selector.window_list_begin")
+        let candidates = snapshotWindowCandidates(includedWindows)
+        timing.mark("selector.window_list_end")
         Task { @MainActor [self] in
             do {
                 // 切勿在拍下悬浮提示之前显示选区或激活本应用。
@@ -389,7 +394,7 @@ struct ScreenPermissionAccess {
                     }
                 }
                 timing.mark("selector.begin")
-                selector.begin(frozenCapture: frozen, timing: timing, including: includedWindows)
+                selector.begin(candidates: candidates, frozenCapture: frozen, timing: timing)
                 timing.mark("selector.begin_returned")
             } catch {
                 timing.finish("capture_failed", error: "capture_failed")

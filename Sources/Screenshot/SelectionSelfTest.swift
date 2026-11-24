@@ -188,6 +188,13 @@ import AppKit
     let snapshot = FrozenCapture(tiles: [FrozenCaptureTile(region: region, image: original)])
     let delegate = AppDelegate()
     delegate.permissionAccess = ScreenPermissionAccess(isAuthorized: { true }, request: { false }, openSettings: {})
+    let selected = CGRect(x: region.midX - 120, y: region.midY - 80, width: 240, height: 160)
+    var liveCandidates = [selected, region]
+    var candidateReads = 0
+    delegate.snapshotWindowCandidates = { _ in
+        candidateReads += 1
+        return liveCandidates
+    }
     var pending: CheckedContinuation<FrozenCapture, Error>?, captures = 0
     delegate.freezeSelection = { _ in
         captures += 1
@@ -201,7 +208,8 @@ import AppKit
     try require(pending != nil, "选区已经出现，但触发时的快照尚未开始")
     try require(activeSelection() == nil, "快照完成前已经显示选区，悬浮提示会被焦点或鼠标打断")
     delegate.capture(scrolling: false)
-    try require(captures == 1, "准备期间重复快捷键启动多次采集")
+    try require(captures == 1 && candidateReads == 1, "准备期间重复快捷键启动多次采集或重新枚举窗口")
+    liveCandidates = [region]
     pending!.resume(returning: snapshot); pending = nil
     try await wait { activeSelection() != nil }
     let view = activeSelection()!, selector = view.owner!
@@ -213,14 +221,14 @@ import AppKit
     view.cacheDisplay(in: view.bounds, to: bitmap)
     let color = bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)!.usingColorSpace(.deviceRGB)!
     try require(color.redComponent - color.greenComponent > 0.3 && color.blueComponent - color.greenComponent > 0.3, "选区背景仍显示实时桌面，冻结的提示不可见：\(color)")
-    let selected = CGRect(x: region.midX - 120, y: region.midY - 80, width: 240, height: 160)
-    selector.mouseDown(at: selected.origin)
-    selector.mouseUp(at: CGPoint(x: selected.maxX, y: selected.maxY))
+    let click = CGPoint(x: selected.midX, y: selected.midY)
+    selector.mouseDown(at: click)
+    selector.mouseUp(at: click)
     try await wait { delegate.diagnosticEditor != nil }
     let editor = delegate.diagnosticEditor!
     try require(captures == 1 && !selector.diagnosticRetainsSnapshot, "框选后重新采集，或已关闭选择器仍持有整屏快照")
     let expected = snapshot.crop(selected)!, actual = editor.canvas.state.image
-    try require(actual.width == expected.width && actual.height == expected.height && (try actual.png()) == (try expected.png()), "编辑结果没有使用触发时的像素")
+    try require(actual.width == expected.width && actual.height == expected.height && (try actual.png()) == (try expected.png()), "浮层消失后单击没有保留触发时的候选范围和像素")
     let board = NSPasteboard(name: .init("Screenshot-Frozen-Selection-\(UUID().uuidString)")); defer { board.releaseGlobally() }
     try actual.copyPNG(to: board)
     try require(board.data(forType: .png) == (try actual.png()), "冻结截图复制结果不一致")
