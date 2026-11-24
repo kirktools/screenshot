@@ -3,18 +3,25 @@ import AppKit
 /// Quartz 窗口坐标以主显示器左上为原点；选择器统一使用 AppKit 屏幕点坐标。
 /// 每次唤起只读取一次窗口列表，保持前后顺序；不查询标题或辅助功能树。
 enum WindowPreselection {
+    // 新版 macOS 的 Spotlight 搜索面板由 Campo 托管。
+    private static let spotlightBundleIDs = ["com.apple.Spotlight", "com.apple.campo"]
+
     @MainActor static func snapshot(including windowsToKeep: Set<CGWindowID> = []) -> [CGRect] {
         let screens = NSScreen.screens
         guard let first = screens.first else { return [] }
         let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-        let spotlight = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Spotlight")
+        let spotlight = spotlightBundleIDs.flatMap {
+            NSRunningApplication.runningApplications(withBundleIdentifier: $0)
+        }
         return regions(from: info, excludingPID: ProcessInfo.processInfo.processIdentifier, screenTop: first.frame.maxY,
                        desktop: screens.reduce(CGRect.null) { $0.union($1.frame) }, screens: screens.map(\.frame),
-                       including: windowsToKeep, spotlightPIDs: Set(spotlight.map(\.processIdentifier)))
+                       including: windowsToKeep, spotlightPIDs: Set(spotlight.map(\.processIdentifier)),
+                       workAreas: screens.map(\.visibleFrame))
     }
 
-    static func regions(from info: [[String: Any]], excludingPID: Int32, screenTop: CGFloat, desktop: CGRect, screens: [CGRect]? = nil, including windowsToKeep: Set<CGWindowID> = [], spotlightPIDs: Set<Int32> = []) -> [CGRect] {
+    static func regions(from info: [[String: Any]], excludingPID: Int32, screenTop: CGFloat, desktop: CGRect, screens: [CGRect]? = nil, including windowsToKeep: Set<CGWindowID> = [], spotlightPIDs: Set<Int32> = [], workAreas: [CGRect] = []) -> [CGRect] {
         let menuLayers = [Int(CGWindowLevelForKey(.mainMenuWindow)), Int(CGWindowLevelForKey(.statusWindow))]
+        let spotlightSurfaces = (screens ?? [desktop]) + workAreas
         var menuBars: [CGRect] = []
         var windows: [CGRect] = []
         for entry in info {
@@ -43,7 +50,7 @@ enum WindowPreselection {
                 // 聚焦的结果面板是系统浮层，允许其可见窗口进入候选，排除整屏事件接收层。
                 let spotlightPanel = spotlightPIDs.contains(pid.int32Value) && layer.intValue > 0
                     && layer.intValue < CGWindowLevelForKey(.screenSaverWindow)
-                    && !(screens ?? [desktop]).contains { rect.insetBy(dx: -1, dy: -1).contains($0) }
+                    && !spotlightSurfaces.contains { rect.insetBy(dx: -1, dy: -1).contains($0) }
                 guard (layer.intValue == 0 || spotlightPanel), rect.width >= 32, rect.height >= 32 else { continue }
                 let visible = rect.intersection(desktop)
                 if !visible.isNull, visible.width >= 32, visible.height >= 32 { windows.append(visible.integral) }

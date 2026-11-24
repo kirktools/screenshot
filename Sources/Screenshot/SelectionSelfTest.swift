@@ -65,6 +65,19 @@ import AppKit
                entry(primary)], excludingPID: 99, screenTop: 900, desktop: primary, spotlightPIDs: [12])
     try require(spotlightCandidates == [CGRect(x: 180, y: 250, width: 680, height: 500), primary],
                 "聚焦浮层未获得预选，或其他高层窗口和聚焦整屏接收层被错误选中")
+    let workArea = CGRect(x: 0, y: 0, width: 1440, height: 870)
+    let campoLayer = 23
+    let campoPanel = CGRect(x: 400, y: 162, width: 640, height: 467)
+    let campo = WindowPreselection.regions(from: [
+        entry(CGRect(x: 0, y: 30, width: 1440, height: 870), pid: 14, layer: campoLayer),
+        entry(campoPanel, pid: 14, layer: campoLayer),
+        entry(primary)
+    ], excludingPID: 99, screenTop: 900, desktop: primary, spotlightPIDs: [14], workAreas: [workArea])
+    var campoState = RegionSelectionState(candidates: campo)
+    let panelCenter = CGPoint(x: 720, y: 505)
+    campoState.mouseDown(at: panelCenter)
+    try require(campoState.mouseUp(at: panelCenter) == CGRect(x: 400, y: 271, width: 640, height: 467),
+                "Campo 搜索面板被工作区接收层遮挡，或未能单击确认")
     let bar = CGRect(x: 0, y: 870, width: 1440, height: 30)
     let menuInfo = [entry(CGRect(x: 0, y: 0, width: 1440, height: 30), layer: Int(CGWindowLevelForKey(.mainMenuWindow)))]
     let menuRegions = WindowPreselection.regions(from: menuInfo, excludingPID: 99, screenTop: 900, desktop: primary)
