@@ -181,23 +181,94 @@ typealias GIFCaptureProvider = MacCaptureProvider
 @MainActor final class GIFPreview: NSWindowController, NSWindowDelegate {
     var closed: (() -> Void)?
     private let data: Data
-    init(data: Data) {
+    private let clipboard: NSPasteboard
+    private let feedback = NSTextField(labelWithString: "")
+
+    init(data: Data, clipboard: NSPasteboard = .general) {
         self.data = data
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 700, height: 540), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        window.title = "GIF 预览"; window.isReleasedWhenClosed = false
-        super.init(window: window); window.delegate = self
-        let image = NSImageView(); image.image = NSImage(data: data); image.animates = true; image.imageScaling = .scaleProportionallyUpOrDown
-        let save = NSButton(title: "保存 GIF…", target: self, action: #selector(saveGIF))
-        let stack = NSStackView(views: [image, save]); stack.orientation = .vertical; stack.spacing = 12
-        stack.translatesAutoresizingMaskIntoConstraints = false; window.contentView!.addSubview(stack)
-        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 16), stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -16), stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 16), stack.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor, constant: -16), image.heightAnchor.constraint(greaterThanOrEqualToConstant: 100)])
-        window.center()
+        self.clipboard = clipboard
+        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
+        let available = screen?.visibleFrame.size ?? CGSize(width: 700, height: 540)
+        let size = CGSize(width: min(700, available.width * 0.9), height: min(540, available.height * 0.9))
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.title = "GIF 预览"
+        window.isReleasedWhenClosed = false
+        window.contentMinSize = CGSize(width: 320, height: 220)
+        super.init(window: window)
+        window.delegate = self
+
+        let image = NSImageView()
+        image.image = NSImage(data: data)
+        image.animates = true
+        image.imageScaling = .scaleProportionallyUpOrDown
+        for orientation in [NSLayoutConstraint.Orientation.horizontal, .vertical] {
+            image.setContentHuggingPriority(.defaultLow, for: orientation)
+            image.setContentCompressionResistancePriority(.defaultLow, for: orientation)
+        }
+
+        let copy = NSButton(title: "复制 GIF", target: self, action: #selector(copy(_:)))
+        copy.keyEquivalent = "c"
+        copy.keyEquivalentModifierMask = .command
+        let save = NSButton(title: "保存 GIF…", target: self, action: #selector(saveDocument(_:)))
+        save.keyEquivalent = "s"
+        save.keyEquivalentModifierMask = .command
+        let actions = NSStackView(views: [copy, save])
+        actions.spacing = 10
+        feedback.textColor = .secondaryLabelColor
+
+        let content = window.contentView!
+        for view in [image, actions, feedback] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            image.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            image.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            image.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
+            image.bottomAnchor.constraint(equalTo: actions.topAnchor, constant: -12),
+            actions.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            actions.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16),
+            feedback.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            feedback.trailingAnchor.constraint(lessThanOrEqualTo: actions.leadingAnchor, constant: -8),
+            feedback.centerYAnchor.constraint(equalTo: actions.centerYAnchor)
+        ])
+        if let screen {
+            let visible = screen.visibleFrame
+            window.setFrameOrigin(CGPoint(x: visible.midX - window.frame.width / 2, y: visible.midY - window.frame.height / 2))
+        } else {
+            window.center()
+        }
     }
-    required init?(coder: NSCoder) { fatalError() }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     func windowWillClose(_ notification: Notification) { closed?() }
-    @objc private func saveGIF() {
-        let panel = NSSavePanel(); panel.allowedContentTypes = [.gif]; panel.nameFieldStringValue = "Screenshot.gif"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { try data.write(to: url, options: .atomic) } catch { showError(error) }
+
+    @objc private func copy(_ sender: Any?) {
+        let item = NSPasteboardItem()
+        let type = NSPasteboard.PasteboardType(UTType.gif.identifier)
+        guard item.setData(data, forType: type) else {
+            feedback.stringValue = "无法复制 GIF"
+            return
+        }
+        clipboard.clearContents()
+        feedback.stringValue = clipboard.writeObjects([item]) ? "已复制 GIF" : "无法复制 GIF"
+    }
+
+    @objc private func saveDocument(_ sender: Any?) {
+        guard let window, window.attachedSheet == nil else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.gif]
+        panel.nameFieldStringValue = "Screenshot.gif"
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            do {
+                try self.exportGIF(to: url)
+                self.feedback.stringValue = "已保存 GIF"
+            } catch { showError(error) }
+        }
+    }
+
+    func exportGIF(to url: URL) throws {
+        try data.write(to: url, options: .atomic)
     }
 }
